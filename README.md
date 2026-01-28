@@ -1,6 +1,6 @@
 # cc-nim
 
-Use **Claude Code CLI for free** with NVIDIA NIM's free unlimited 40 reqs/s API. This lightweight proxy converts Claude Code's Anthropic API requests to NVIDIA NIM format.
+Use **Claude Code CLI for free** with NVIDIA NIM's free unlimited 40 reqs/min API. This lightweight proxy converts Claude Code's Anthropic API requests to NVIDIA NIM format.
 
 ## Quick Start
 
