@@ -59,6 +59,7 @@ Browse all models at [build.nvidia.com](https://build.nvidia.com/explore/discove
 ### Updating the Model List
 
 To update `nvidia_nim_models.json` with the latest models from NVIDIA NIM, run the following command:
+
 ```bash
 curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 ```
@@ -75,6 +76,16 @@ curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 | `NVIDIA_NIM_RATE_WINDOW` | Rate limit window (seconds)    | `60`                                  |
 
 See [`.env.example`](.env.example) for all supported parameters.
+
+## Development
+
+### Running Tests
+
+To run the test suite, use the following command:
+
+```bash
+uv run pytest
+```
 
 ## Adding Your Own Provider
 
