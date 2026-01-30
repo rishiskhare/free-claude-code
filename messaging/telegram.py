@@ -25,6 +25,7 @@ try:
         filters,
     )
     from telegram.error import TelegramError, RetryAfter, NetworkError
+    from telegram.request import HTTPXRequest
 
     TELEGRAM_AVAILABLE = True
 except ImportError:
@@ -71,8 +72,13 @@ class TelegramPlatform(MessagingPlatform):
         if not self.bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
 
+        # Configure request with longer timeouts
+        request = HTTPXRequest(
+            connection_pool_size=8, connect_timeout=30.0, read_timeout=30.0
+        )
+
         # Build Application
-        builder = Application.builder().token(self.bot_token)
+        builder = Application.builder().token(self.bot_token).request(request)
         self._application = builder.build()
 
         # Register Internal Handlers
@@ -86,15 +92,30 @@ class TelegramPlatform(MessagingPlatform):
             MessageHandler(filters.COMMAND, self._on_telegram_message)
         )
 
-        # Initialize internal components
-        await self._application.initialize()
-        await self._application.start()
+        # Initialize internal components with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await self._application.initialize()
+                await self._application.start()
 
-        # Start polling (non-blocking way for integration)
-        # allowed_updates=None (all)
-        await self._application.updater.start_polling(drop_pending_updates=False)
+                # Start polling (non-blocking way for integration)
+                await self._application.updater.start_polling(
+                    drop_pending_updates=False
+                )
 
-        self._connected = True
+                self._connected = True
+                break
+            except (NetworkError, Exception) as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 * (attempt + 1)
+                    logger.warning(
+                        f"Connection failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to connect after {max_retries} attempts")
+                    raise
 
         # Initialize rate limiter
         from .limiter import GlobalRateLimiter
