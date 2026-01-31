@@ -1,4 +1,3 @@
-import pytest
 from providers.model_utils import (
     strip_provider_prefixes,
     is_claude_model,

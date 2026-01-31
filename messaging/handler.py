@@ -11,7 +11,7 @@ import asyncio
 import logging
 from typing import Optional, TYPE_CHECKING
 
-from .base import MessagingPlatform, SessionManagerInterface, CLISession
+from .base import MessagingPlatform, SessionManagerInterface
 from .models import IncomingMessage
 from .session import SessionStore
 from .tree_queue import TreeQueueManager, MessageNode, MessageState
@@ -279,7 +279,7 @@ class ClaudeMessageHandler:
                     elif parsed["type"] == "complete":
                         if not any(components.values()):
                             components["content"].append("Done.")
-                        logger.info(f"HANDLER: Task complete, updating UI")
+                        logger.info("HANDLER: Task complete, updating UI")
                         # Always force final complete status to bypass flood wait
                         await update_ui("✅ **Complete**", force=True)
 
@@ -298,7 +298,7 @@ class ClaudeMessageHandler:
                             f"HANDLER: Error event received: {error_msg[:200]}"
                         )
                         components["errors"].append(error_msg)
-                        logger.info(f"HANDLER: Updating UI with error status")
+                        logger.info("HANDLER: Updating UI with error status")
                         # Always force error status to bypass flood wait
                         await update_ui("❌ **Error**", force=True)
                         if tree:
@@ -313,7 +313,7 @@ class ClaudeMessageHandler:
                                     self.platform.queue_edit_message(
                                         child.incoming.chat_id,
                                         child.status_message_id,
-                                        f"❌ **Cancelled:** Parent task failed",
+                                        "❌ **Cancelled:** Parent task failed",
                                         parse_mode="markdown",
                                     )
                                 )
@@ -335,7 +335,7 @@ class ClaudeMessageHandler:
                         self.platform.queue_edit_message(
                             child.incoming.chat_id,
                             child.status_message_id,
-                            f"❌ **Cancelled:** Parent task was stopped",
+                            "❌ **Cancelled:** Parent task was stopped",
                             parse_mode="markdown",
                         )
                     )
@@ -359,7 +359,7 @@ class ClaudeMessageHandler:
                         self.platform.queue_edit_message(
                             child.incoming.chat_id,
                             child.status_message_id,
-                            f"❌ **Cancelled:** Parent task failed",
+                            "❌ **Cancelled:** Parent task failed",
                             parse_mode="markdown",
                         )
                     )

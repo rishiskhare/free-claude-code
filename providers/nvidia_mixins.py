@@ -10,7 +10,7 @@ NVIDIA NIM provider functionality:
 
 import json
 import logging
-from typing import Any, Dict, AsyncIterator
+from typing import Any, Dict
 
 from .utils import AnthropicToOpenAIConverter, map_stop_reason, extract_think_content
 from .exceptions import (

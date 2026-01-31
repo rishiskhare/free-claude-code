@@ -1,8 +1,6 @@
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from messaging.handler import ClaudeMessageHandler
-from messaging.models import IncomingMessage
 from messaging.tree_queue import MessageState
 
 

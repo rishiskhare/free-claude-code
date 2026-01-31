@@ -1,5 +1,4 @@
 import json
-import pytest
 from providers.utils.message_converter import AnthropicToOpenAIConverter
 
 # --- Mock Classes ---

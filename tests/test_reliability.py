@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from messaging.telegram import TelegramPlatform
 from telegram.error import NetworkError, RetryAfter, TelegramError

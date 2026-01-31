@@ -12,7 +12,7 @@ import os
 # This must be set BEFORE importing telegram.error
 os.environ["PTB_TIMEDELTA"] = "1"
 
-from typing import Callable, Awaitable, Optional, Any, Dict
+from typing import Callable, Awaitable, Optional, Any
 
 from .base import MessagingPlatform
 from .models import IncomingMessage

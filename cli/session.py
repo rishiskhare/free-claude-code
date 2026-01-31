@@ -84,7 +84,7 @@ class CLISession:
                     "--dangerously-skip-permissions",
                     "--verbose",
                 ]
-                logger.info(f"Starting new Claude session")
+                logger.info("Starting new Claude session")
 
             if self.allowed_dirs:
                 for d in self.allowed_dirs:
@@ -149,7 +149,7 @@ class CLISession:
                         logger.error(f"Claude CLI Stderr: {stderr_text}")
                         # Yield stderr as error event so it shows in UI
                         if stderr_text:
-                            logger.info(f"CLI_SESSION: Yielding error event from stderr")
+                            logger.info("CLI_SESSION: Yielding error event from stderr")
                             yield {"type": "error", "error": {"message": stderr_text}}
 
                 return_code = await self.process.wait()

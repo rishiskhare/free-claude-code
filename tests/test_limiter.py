@@ -4,7 +4,6 @@ import asyncio
 import time
 import os
 import logging
-from unittest.mock import MagicMock
 
 # Set environment variables relative to test execution
 os.environ["MESSAGING_RATE_LIMIT"] = "1"

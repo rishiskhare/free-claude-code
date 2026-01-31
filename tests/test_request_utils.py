@@ -1,6 +1,5 @@
 """Tests for api/request_utils.py module."""
 
-import pytest
 from unittest.mock import MagicMock
 
 from api.request_utils import (

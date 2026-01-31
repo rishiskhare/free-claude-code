@@ -1,7 +1,5 @@
 """Tests for config/settings.py"""
 
-import pytest
-import os
 
 
 class TestSettings:

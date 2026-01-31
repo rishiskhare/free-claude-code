@@ -1,4 +1,3 @@
-import pytest
 from messaging.event_parser import parse_cli_event
 
 

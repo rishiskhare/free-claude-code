@@ -1,6 +1,5 @@
 """FastAPI route handlers."""
 
-import json
 import logging
 import uuid
 

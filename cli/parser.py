@@ -1,7 +1,7 @@
 """CLI event parser for Claude Code CLI output."""
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 

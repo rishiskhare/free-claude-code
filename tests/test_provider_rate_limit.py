@@ -4,7 +4,6 @@ import asyncio
 import time
 import os
 import logging
-from unittest.mock import MagicMock
 
 from providers.rate_limit import GlobalRateLimiter
 

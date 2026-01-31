@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Iterator, List
+from typing import Optional, Dict, Any, Iterator
 
 try:
     import tiktoken

@@ -1,7 +1,7 @@
 """Abstract base class for messaging platforms."""
 
 from abc import ABC, abstractmethod
-from typing import Callable, Awaitable, Optional, Any, Protocol, Tuple, runtime_checkable
+from typing import Callable, Awaitable, Optional, Protocol, Tuple, runtime_checkable
 from .models import IncomingMessage
 
 

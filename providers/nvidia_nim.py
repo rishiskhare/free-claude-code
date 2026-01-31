@@ -4,7 +4,7 @@ import logging
 import os
 import json
 import uuid
-from typing import Dict, Any, AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 from httpx import TimeoutException, ConnectTimeout
@@ -16,15 +16,9 @@ from .utils import (
     ThinkTagParser,
     HeuristicToolParser,
     ContentType,
-    extract_think_content,
     extract_reasoning_from_delta,
-    AnthropicToOpenAIConverter,
 )
 from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    RateLimitError,
-    OverloadedError,
     APIError,
 )
 from .nvidia_mixins import (
@@ -73,7 +67,7 @@ class NvidiaNimProvider(
             message_id = f"msg_{uuid.uuid4()}"
             sse = SSEBuilder(message_id, request.model, input_tokens)
             error_msg = "⏱️ Global rate limit active. Resuming now..."
-            logger.info(f"NIM_STREAM: Reactive block detected, notified user")
+            logger.info("NIM_STREAM: Reactive block detected, notified user")
             yield sse.message_start()
             for event in sse.emit_error(error_msg):
                 yield event
@@ -179,7 +173,7 @@ class NvidiaNimProvider(
             error_message = (
                 f"⏱️ API Timeout ({timeout_type}): Request exceeded time limit"
             )
-            logger.info(f"NIM_STREAM: Emitting SSE error event for timeout")
+            logger.info("NIM_STREAM: Emitting SSE error event for timeout")
         except Exception as e:
             logger.error(f"NIM_ERROR: {type(e).__name__}: {e}")
             error_occurred = True

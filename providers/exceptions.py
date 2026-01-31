@@ -1,6 +1,6 @@
 """Unified exception hierarchy for providers."""
 
-from typing import Optional, Any
+from typing import Any
 
 
 class ProviderError(Exception):

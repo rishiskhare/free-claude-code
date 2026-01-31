@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from api.dependencies import get_provider, get_settings, cleanup_provider
 from providers.nvidia_nim import NvidiaNimProvider

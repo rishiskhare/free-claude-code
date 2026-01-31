@@ -4,12 +4,8 @@ import httpx
 from unittest.mock import MagicMock, AsyncMock, patch
 from providers.nvidia_nim import (
     NvidiaNimProvider,
-    RateLimitError,
     APIError,
-    OverloadedError,
 )
-from providers.base import ProviderConfig
-from providers.utils import ContentType
 
 
 # Mock data classes

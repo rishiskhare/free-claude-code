@@ -1,8 +1,6 @@
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from messaging.telegram import TelegramPlatform, TELEGRAM_AVAILABLE
-from messaging.models import IncomingMessage
+from messaging.telegram import TelegramPlatform
 
 
 @pytest.fixture
