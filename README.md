@@ -21,7 +21,7 @@ cd free-claude-code
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit the first two lines at the top of the .env with the desired model and NIM API key:
 
 ```dotenv
 NVIDIA_NIM_API_KEY=nvapi-your-key-here
@@ -45,6 +45,45 @@ ANTHROPIC_AUTH_TOKEN=freecc ANTHROPIC_BASE_URL=http://localhost:8082 claude
 ```
 
 That's it! Claude Code now uses NVIDIA NIM for free.
+
+> **Pro-tip:** If you don't want to type those export variables every single time, add a quick alias to your shell profile (`~/.bashrc` or `~/.zshrc`):
+>
+> ```bash
+> alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc" claude'
+> ```
+>
+> Then reload your shell (`source ~/.zshrc` or `source ~/.bashrc`) and just type:
+>
+> ```bash
+> claude-kimi
+> ```
+
+#### Running the Proxy in the Background (PM2)
+
+You don't need to keep a terminal window open for the proxy server. Use [PM2](https://pm2.io/) to run it in the background:
+
+1. **Install PM2:**
+
+```bash
+npm install -g pm2
+```
+
+2. **Start the proxy in the background** (from the `free-claude-code` directory):
+
+```bash
+pm2 start "uv run uvicorn server:app --host 0.0.0.0 --port 8082" --name "kimi-proxy"
+```
+
+You can now close the terminal — the proxy runs silently in the background and your `claude-kimi` alias will work whenever you need it.
+
+3. **Manage it later:**
+
+| Command | Description |
+| --- | --- |
+| `pm2 list` | See if it's running |
+| `pm2 logs kimi-proxy` | View server logs (great for troubleshooting) |
+| `pm2 stop kimi-proxy` | Stop the server |
+| `pm2 restart kimi-proxy` | Restart (e.g. after changing your API key in `.env`) |
 
 ---
 
