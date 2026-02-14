@@ -20,7 +20,7 @@ class CLISession(Protocol):
     """Protocol for CLI session - avoid circular import from cli package."""
 
     def start_task(
-        self, prompt: str, session_id: Optional[str] = None
+        self, prompt: str, session_id: Optional[str] = None, fork_session: bool = False
     ) -> AsyncGenerator[Dict, Any]:
         """Start a task in the CLI session."""
         ...
@@ -58,6 +58,10 @@ class SessionManagerInterface(Protocol):
 
     async def stop_all(self) -> None:
         """Stop all sessions."""
+        ...
+
+    async def remove_session(self, session_id: str) -> bool:
+        """Remove a session from the manager."""
         ...
 
     def get_stats(self) -> dict:
@@ -126,6 +130,21 @@ class MessagingPlatform(ABC):
         pass
 
     @abstractmethod
+    async def delete_message(
+        self,
+        chat_id: str,
+        message_id: str,
+    ) -> None:
+        """
+        Delete a message from a chat.
+
+        Args:
+            chat_id: The chat/channel ID
+            message_id: The message ID to delete
+        """
+        pass
+
+    @abstractmethod
     async def queue_send_message(
         self,
         chat_id: str,
@@ -153,6 +172,21 @@ class MessagingPlatform(ABC):
     ) -> None:
         """
         Enqueue a message edit.
+
+        If fire_and_forget is True, returns immediately.
+        Otherwise, waits for the rate limiter.
+        """
+        pass
+
+    @abstractmethod
+    async def queue_delete_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        fire_and_forget: bool = True,
+    ) -> None:
+        """
+        Enqueue a message deletion.
 
         If fire_and_forget is True, returns immediately.
         Otherwise, waits for the rate limiter.
