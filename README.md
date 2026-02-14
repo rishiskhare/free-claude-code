@@ -24,8 +24,6 @@ You need these before starting:
 ### Step 2: Clone the repo and add your API key
 
 ```bash
-git clone https://github.com/Alishahryar1/free-claude-code.git
-cd free-claude-code
 cp .env.example .env
 ```
 
