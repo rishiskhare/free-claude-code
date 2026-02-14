@@ -10,6 +10,7 @@ import time
 import asyncio
 import logging
 import re
+import os
 from typing import List, Optional
 
 from markdown_it import MarkdownIt
@@ -19,6 +20,7 @@ from .models import IncomingMessage
 from .session import SessionStore
 from .tree_queue import TreeQueueManager, MessageNode, MessageState, MessageTree
 from .event_parser import parse_cli_event
+from .transcript import TranscriptBuffer, RenderCtx
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +78,8 @@ def _normalize_gfm_tables(text: str) -> str:
             and _TABLE_SEP_RE.match(lines[idx + 1])
         ):
             if out_lines and out_lines[-1].strip() != "":
-                indent = re.match(r"^(\s*)", line).group(1)
+                m = re.match(r"^(\s*)", line)
+                indent = m.group(1) if m else ""
                 # A line of only whitespace counts as a blank line and preserves
                 # list indentation contexts (tables inside list items).
                 out_lines.append(indent)
@@ -614,19 +617,21 @@ class ClaudeMessageHandler:
         if tree:
             await tree.update_state(node_id, MessageState.IN_PROGRESS)
 
-        # Components for structured display
-        components = {
-            "thinking": [],
-            "tools": [],
-            "subagents": [],
-            "content": [],
-            "errors": [],
-        }
+        transcript = TranscriptBuffer(show_tool_results=False)
+        render_ctx = RenderCtx(
+            bold=mdv2_bold,
+            code_inline=mdv2_code_inline,
+            escape_code=escape_md_v2_code,
+            escape_text=escape_md_v2,
+            render_markdown=render_markdown_to_mdv2,
+        )
 
         last_ui_update = 0.0
         last_displayed_text = None
+        had_transcript_events = False
         captured_session_id = None
         temp_session_id = None
+        last_status: Optional[str] = None
 
         # Get parent session ID for forking (if child node)
         parent_session_id = None
@@ -636,7 +641,7 @@ class ClaudeMessageHandler:
                 logger.info(f"Will fork from parent session: {parent_session_id}")
 
         async def update_ui(status: Optional[str] = None, force: bool = False) -> None:
-            nonlocal last_ui_update, last_displayed_text
+            nonlocal last_ui_update, last_displayed_text, last_status
             now = time.time()
 
             # Small 1s debounce for UI sanity - we still want to avoid
@@ -645,8 +650,29 @@ class ClaudeMessageHandler:
                 return
 
             last_ui_update = now
-            display = self._build_message(components, status)
+            if status is not None:
+                last_status = status
+            display = transcript.render(render_ctx, limit_chars=3900, status=status)
             if display and display != last_displayed_text:
+                # Debug logging: capture what we are sending to Telegram.
+                # Full text logging can be noisy and may include sensitive content, so gate it.
+                logger.debug(
+                    "TELEGRAM_EDIT: node_id=%s chat_id=%s msg_id=%s force=%s status=%r chars=%d",
+                    node_id,
+                    chat_id,
+                    status_msg_id,
+                    bool(force),
+                    status,
+                    len(display),
+                )
+                if os.getenv("DEBUG_TELEGRAM_EDITS") == "1":
+                    logger.debug("TELEGRAM_EDIT_TEXT:\n%s", display)
+                else:
+                    head = display[:500]
+                    tail = display[-500:] if len(display) > 500 else ""
+                    logger.debug("TELEGRAM_EDIT_PREVIEW_HEAD:\n%s", head)
+                    if tail:
+                        logger.debug("TELEGRAM_EDIT_PREVIEW_TAIL:\n%s", tail)
                 last_displayed_text = display
                 await self.platform.queue_edit_message(
                     chat_id, status_msg_id, display, parse_mode="MarkdownV2"
@@ -667,7 +693,7 @@ class ClaudeMessageHandler:
                 else:
                     captured_session_id = session_or_temp_id
             except RuntimeError as e:
-                components["errors"].append(str(e))
+                transcript.apply({"type": "error", "message": str(e)})
                 await update_ui(
                     format_status("⏳", "Session limit reached"), force=True
                 )
@@ -718,28 +744,47 @@ class ClaudeMessageHandler:
                 logger.debug(f"HANDLER: Parsed {len(parsed_list)} events from CLI")
 
                 for parsed in parsed_list:
-                    if parsed["type"] == "thinking":
-                        components["thinking"].append(parsed["text"])
+                    ptype = parsed.get("type")
+                    if ptype in (
+                        "thinking_start",
+                        "thinking_delta",
+                        "thinking_chunk",
+                        "thinking_stop",
+                        "text_start",
+                        "text_delta",
+                        "text_chunk",
+                        "text_stop",
+                        "tool_use_start",
+                        "tool_use_delta",
+                        "tool_use_stop",
+                        "tool_use",
+                        "tool_result",
+                        "block_stop",
+                        "error",
+                    ):
+                        transcript.apply(parsed)
+                        had_transcript_events = True
+
+                    if ptype in ("thinking_start", "thinking_delta", "thinking_chunk"):
                         await update_ui(format_status("🧠", "Claude is thinking..."))
-
-                    elif parsed["type"] == "content":
-                        if parsed.get("text"):
-                            components["content"].append(parsed["text"])
+                    elif ptype in ("text_start", "text_delta", "text_chunk"):
                         await update_ui(format_status("🧠", "Claude is working..."))
-
-                    elif parsed["type"] == "tool_start":
-                        names = [t.get("name") for t in parsed.get("tools", [])]
-                        components["tools"].extend(names)
+                    elif ptype in ("tool_use_start", "tool_use_delta", "tool_use"):
+                        if parsed.get("name") == "Task":
+                            await update_ui(format_status("🤖", "Subagent working..."))
+                        else:
+                            await update_ui(format_status("⏳", "Executing tools..."))
+                    elif ptype == "tool_result":
                         await update_ui(format_status("⏳", "Executing tools..."))
-
-                    elif parsed["type"] == "subagent_start":
-                        tasks = parsed.get("tasks", [])
-                        components["subagents"].extend(tasks)
-                        await update_ui(format_status("🤖", "Subagent working..."))
+                    elif ptype == "block_stop":
+                        # Force-flush at block boundaries so we don't get stuck showing
+                        # the last partial line if deltas landed inside the debounce window.
+                        await update_ui(last_status, force=True)
 
                     elif parsed["type"] == "complete":
-                        if not any(components.values()):
-                            components["content"].append("Done.")
+                        # If nothing happened (rare), still show a completion marker.
+                        if not had_transcript_events:
+                            transcript.apply({"type": "text_chunk", "text": "Done."})
                         logger.info("HANDLER: Task complete, updating UI")
                         await update_ui(format_status("✅", "Complete"), force=True)
 
@@ -757,7 +802,6 @@ class ClaudeMessageHandler:
                         logger.error(
                             f"HANDLER: Error event received: {error_msg[:200]}"
                         )
-                        components["errors"].append(error_msg)
                         logger.info("HANDLER: Updating UI with error status")
                         await update_ui(format_status("❌", "Error"), force=True)
                         if tree:
@@ -774,7 +818,7 @@ class ClaudeMessageHandler:
             if cancel_reason == "stop":
                 await update_ui(format_status("⏹", "Stopped."), force=True)
             else:
-                components["errors"].append("Task was cancelled")
+                transcript.apply({"type": "error", "message": "Task was cancelled"})
                 await update_ui(format_status("❌", "Cancelled"), force=True)
 
             # Do not propagate cancellation to children; a reply-scoped "/stop"
@@ -788,16 +832,14 @@ class ClaudeMessageHandler:
                 f"HANDLER: Task failed with exception: {type(e).__name__}: {e}"
             )
             error_msg = str(e)[:200]
-            components["errors"].append(error_msg)
+            transcript.apply({"type": "error", "message": error_msg})
             await update_ui(format_status("💥", "Task Failed"), force=True)
             if tree:
                 await self._propagate_error_to_children(
                     node_id, error_msg, "Parent task failed"
                 )
         finally:
-            logger.info(
-                f"HANDLER: _process_node completed for node {node_id}, errors={len(components['errors'])}"
-            )
+            logger.info(f"HANDLER: _process_node completed for node {node_id}")
             # Free the session-manager slot. Session IDs are persisted in the tree and
             # can be resumed later by ID; we don't need to keep a CLISession instance
             # around after this node completes.
@@ -829,87 +871,6 @@ class ClaudeMessageHandler:
                     parse_mode="MarkdownV2",
                 )
             )
-
-    def _build_message(
-        self,
-        components: dict,
-        status: Optional[str] = None,
-    ) -> str:
-        """
-        Build unified message with specific order.
-        Handles truncation while preserving markdown structure (closing code blocks).
-        """
-        lines = []
-
-        # 1. Thinking
-        if components["thinking"]:
-            thinking_text = "".join(components["thinking"])
-            # Truncate thinking if too long, it's usually less critical than final content
-            if len(thinking_text) > 1000:
-                thinking_text = "..." + thinking_text[-995:]
-
-            lines.append(
-                f"💭 {mdv2_bold('Thinking:')}\n```\n{escape_md_v2_code(thinking_text)}\n```"
-            )
-
-        # 2. Tools
-        if components["tools"]:
-            unique_tools = []
-            seen = set()
-            for t in components["tools"]:
-                if t and t not in seen:
-                    unique_tools.append(str(t))
-                    seen.add(t)
-            if unique_tools:
-                lines.append(
-                    f"🛠 {mdv2_bold('Tools:')} {mdv2_code_inline(', '.join(unique_tools))}"
-                )
-
-        # 3. Subagents
-        if components["subagents"]:
-            for task in components["subagents"]:
-                lines.append(f"🤖 {mdv2_bold('Subagent:')} {mdv2_code_inline(task)}")
-
-        # 4. Content
-        if components["content"]:
-            lines.append(render_markdown_to_mdv2("".join(components["content"])))
-
-        # 5. Errors
-        if components["errors"]:
-            for err in components["errors"]:
-                lines.append(f"⚠️ {mdv2_bold('Error:')} {mdv2_code_inline(err)}")
-
-        if not any(lines) and not status:
-            return format_status("⏳", "Claude is working...")
-
-        # Telegram character limit is 4096. We leave buffer for status updates.
-        LIMIT = 3900
-
-        # Filter out empty lines first for a clean join
-        lines = [l for l in lines if l]
-
-        main_text = "\n".join(lines)
-        status_text = f"\n\n{status}" if status else ""
-
-        if len(main_text) + len(status_text) <= LIMIT:
-            return (
-                main_text + status_text
-                if main_text + status_text
-                else format_status("⏳", "Claude is working...")
-            )
-
-        # If too long, truncate the start of the content (keep the end)
-        available_limit = LIMIT - len(status_text) - 20  # 20 for truncation marker
-        raw_truncated = main_text[-available_limit:].lstrip()
-
-        # Check for unbalanced code blocks
-        prefix = escape_md_v2("... (truncated)\n")
-        if raw_truncated.count("```") % 2 != 0:
-            prefix += "```\n"
-
-        truncated_main = prefix + raw_truncated
-
-        return truncated_main + status_text
 
     def _get_initial_status(
         self,
