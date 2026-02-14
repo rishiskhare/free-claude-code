@@ -1,0 +1,78 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPO: Alishahryar1/free-claude-code
+      UPSTREAM_BRANCH: main
+      FORK_BRANCH: main
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" 2>/dev/null || true
+          git fetch upstream "${{ env.UPSTREAM_BRANCH }}" --no-tags
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          UPSTREAM_HEAD=$(git rev-parse "upstream/${{ env.UPSTREAM_BRANCH }}")
+          MERGE_BASE=$(git merge-base HEAD "upstream/${{ env.UPSTREAM_BRANCH }}")
+
+          if [ "$MERGE_BASE" = "$UPSTREAM_HEAD" ]; then
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
+            echo "::notice::Already up to date with upstream."
+          else
+            BEHIND=$(git rev-list --count HEAD.."upstream/${{ env.UPSTREAM_BRANCH }}")
+            echo "status=behind" >> "$GITHUB_OUTPUT"
+            echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+            echo "::notice::$BEHIND commit(s) behind upstream."
+          fi
+
+      - name: Merge upstream (fork wins on conflicts)
+        if: steps.check.outputs.status == 'behind'
+        run: |
+          # -X ours: on conflict, keep fork's version. Non-conflicting
+          # upstream changes (new files, edits to untouched files) merge in
+          # cleanly. Fork edits are never overwritten.
+          git merge "upstream/${{ env.UPSTREAM_BRANCH }}" \
+            -X ours \
+            --no-edit \
+            -m "Merge upstream/${{ env.UPSTREAM_BRANCH }} into ${{ env.FORK_BRANCH }}"
+
+      - name: Push
+        if: steps.check.outputs.status == 'behind'
+        run: |
+          git push origin "${{ env.FORK_BRANCH }}"
+          echo "::notice::Merged ${{ steps.check.outputs.behind }} upstream commit(s). Fork edits preserved."
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Upstream Sync" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.check.outputs.status }}" = "up-to-date" ]; then
+            echo "Already up to date." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Merged **${{ steps.check.outputs.behind }}** upstream commit(s). Fork edits preserved on any conflicts." >> "$GITHUB_STEP_SUMMARY"
+          fi
