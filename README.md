@@ -54,8 +54,22 @@ That's it — the proxy is now running in the background. You can close this ter
 
 #### Option A: Terminal (CLI)
 
+Add this alias to your `~/.zshrc` (macOS) or `~/.bashrc` (Linux):
+
 ```bash
-./claude-free
+alias claude-free='/full/path/to/free-claude-code/claude-free'
+```
+
+Replace the path with where you cloned the repo (e.g., `/Users/yourname/Downloads/free-claude-code/`), then reload your shell:
+
+```bash
+source ~/.zshrc    # or: source ~/.bashrc
+```
+
+Now you can run it from any directory:
+
+```bash
+claude-free
 ```
 
 You'll see a searchable list of every available model. Pick one and go. Just type a few letters to filter (e.g., type "kimi" to find Kimi K2.5 instantly).
@@ -83,40 +97,21 @@ That's it — the Claude Code panel in VSCode now uses NVIDIA NIM for free. To s
 
 ---
 
-## Set Up Aliases (Optional, Recommended)
+## Model-Specific Aliases (Optional)
 
-Add these to your `~/.zshrc` (macOS) or `~/.bashrc` (Linux) so you can run `claude-free` from anywhere:
+You can also create aliases that skip the picker and go straight into a specific model. Add this to your `~/.zshrc` or `~/.bashrc`:
 
 ```bash
-# Interactive model picker — works from any directory
-alias claude-free='/full/path/to/free-claude-code/claude-free'
-
-# Shortcuts for specific models — skip the picker entirely
 alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc:moonshotai/kimi-k2.5" claude'
-alias claude-step='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc:stepfun-ai/step-3.5-flash" claude'
-alias claude-glm='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc:z-ai/glm4.7" claude'
 ```
 
-Replace `/full/path/to/free-claude-code/` with the actual path where you cloned the repo (e.g., `/Users/yourname/Downloads/free-claude-code/`). Then reload your shell:
-
-```bash
-source ~/.zshrc    # or: source ~/.bashrc
-```
-
-Now you can use these from anywhere:
-
-```bash
-claude-free    # pick any model from a list
-claude-kimi    # go straight into Kimi K2.5
-claude-step    # go straight into Step 3.5 Flash
-claude-glm     # go straight into GLM 4.7
-```
+Swap out the model ID after `freecc:` to use any model (see [Available Models](#available-models)). Then run `source ~/.zshrc` (or `source ~/.bashrc`).
 
 ---
 
 ## Available Models
 
-The `./claude-free` picker shows all of these automatically. Here are some popular ones:
+The `claude-free` picker shows all of these automatically. Here are some popular ones:
 
 | Model | ID | Notes |
 | --- | --- | --- |
@@ -168,7 +163,7 @@ ALLOWED_DIR=/Users/yourname/projects
 
 | Problem | Fix |
 | --- | --- |
-| `./claude-free` says "command not found" | Make sure you're in the `free-claude-code` directory, or use the full path |
+| `claude-free` says "command not found" | Make sure you added the alias to your shell config and ran `source ~/.zshrc` (or `source ~/.bashrc`) |
 | "nvidia_nim_models.json not found" | Run `curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json` |
 | NVIDIA API errors | Check that your `NVIDIA_NIM_API_KEY` in `.env` is correct and not expired |
 | "Connection refused" when running Claude | Make sure the proxy server is running in another terminal (Step 3) |
@@ -183,7 +178,7 @@ The only setting most users need is `NVIDIA_NIM_API_KEY` in `.env`. Everything e
 | Variable | Description | Default |
 | --- | --- | --- |
 | `NVIDIA_NIM_API_KEY` | Your NVIDIA API key | **required** |
-| `MODEL` | Fallback model (when not using `./claude-free`) | `moonshotai/kimi-k2.5` |
+| `MODEL` | Fallback model (when not using `claude-free`) | `moonshotai/kimi-k2.5` |
 | `CLAUDE_WORKSPACE` | Directory for agent workspace | `./agent_workspace` |
 | `ALLOWED_DIR` | Allowed directories for agent | `""` |
 | `MAX_CLI_SESSIONS` | Max concurrent CLI sessions | `10` |
