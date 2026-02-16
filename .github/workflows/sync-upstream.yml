@@ -2,12 +2,15 @@ name: Sync Fork with Upstream
 
 on:
   schedule:
-    # Run every 12 hours
     - cron: "0 */12 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -29,7 +32,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Add upstream and fetch
+      - name: Fetch upstream
         run: |
           git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" 2>/dev/null || true
           git fetch upstream "${{ env.UPSTREAM_BRANCH }}" --no-tags
@@ -37,14 +40,11 @@ jobs:
       - name: Check for new upstream commits
         id: check
         run: |
-          UPSTREAM_HEAD=$(git rev-parse "upstream/${{ env.UPSTREAM_BRANCH }}")
-          MERGE_BASE=$(git merge-base HEAD "upstream/${{ env.UPSTREAM_BRANCH }}")
-
-          if [ "$MERGE_BASE" = "$UPSTREAM_HEAD" ]; then
+          BEHIND=$(git rev-list --count HEAD.."upstream/${{ env.UPSTREAM_BRANCH }}")
+          if [ "$BEHIND" -eq 0 ]; then
             echo "status=up-to-date" >> "$GITHUB_OUTPUT"
             echo "::notice::Already up to date with upstream."
           else
-            BEHIND=$(git rev-list --count HEAD.."upstream/${{ env.UPSTREAM_BRANCH }}")
             echo "status=behind" >> "$GITHUB_OUTPUT"
             echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
             echo "::notice::$BEHIND commit(s) behind upstream."
@@ -52,27 +52,61 @@ jobs:
 
       - name: Merge upstream (fork wins on conflicts)
         if: steps.check.outputs.status == 'behind'
+        id: merge
         run: |
-          # -X ours: on conflict, keep fork's version. Non-conflicting
-          # upstream changes (new files, edits to untouched files) merge in
-          # cleanly. Fork edits are never overwritten.
-          git merge "upstream/${{ env.UPSTREAM_BRANCH }}" \
-            -X ours \
-            --no-edit \
-            -m "Merge upstream/${{ env.UPSTREAM_BRANCH }} into ${{ env.FORK_BRANCH }}"
+          if git merge "upstream/${{ env.UPSTREAM_BRANCH }}" -X ours --no-edit \
+            -m "Merge upstream/${{ env.UPSTREAM_BRANCH }} into ${{ env.FORK_BRANCH }}"; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Merge failed, attempting abort and retry with rebase strategy."
+            git merge --abort 2>/dev/null || true
+            # Fall back: rebase fork commits on top of upstream
+            if git rebase -X ours "upstream/${{ env.UPSTREAM_BRANCH }}"; then
+              echo "result=rebased" >> "$GITHUB_OUTPUT"
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "result=failed" >> "$GITHUB_OUTPUT"
+              echo "::error::Both merge and rebase failed. Manual intervention required."
+              exit 1
+            fi
+          fi
+
+      - name: Pull latest before push (avoid non-fast-forward)
+        if: steps.check.outputs.status == 'behind'
+        run: |
+          git fetch origin "${{ env.FORK_BRANCH }}"
+          # If origin moved since checkout, incorporate those changes
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          ORIGIN_HEAD=$(git rev-parse "origin/${{ env.FORK_BRANCH }}")
+          if [ "$LOCAL_HEAD" != "$ORIGIN_HEAD" ] && ! git merge-base --is-ancestor "$ORIGIN_HEAD" "$LOCAL_HEAD"; then
+            echo "::notice::Origin moved since checkout, rebasing on top."
+            git rebase "origin/${{ env.FORK_BRANCH }}"
+          fi
 
       - name: Push
         if: steps.check.outputs.status == 'behind'
         run: |
-          git push origin "${{ env.FORK_BRANCH }}"
-          echo "::notice::Merged ${{ steps.check.outputs.behind }} upstream commit(s). Fork edits preserved."
+          # Retry push up to 3 times to handle transient failures
+          for i in 1 2 3; do
+            if git push origin "${{ env.FORK_BRANCH }}"; then
+              echo "::notice::Merged ${{ steps.check.outputs.behind }} upstream commit(s). Fork edits preserved."
+              exit 0
+            fi
+            echo "::warning::Push attempt $i failed, retrying in 5s..."
+            sleep 5
+            git pull --rebase origin "${{ env.FORK_BRANCH }}"
+          done
+          echo "::error::Push failed after 3 attempts."
+          exit 1
 
       - name: Summary
         if: always()
         run: |
           echo "## Upstream Sync" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.check.outputs.status }}" = "up-to-date" ]; then
-            echo "Already up to date." >> "$GITHUB_STEP_SUMMARY"
+            echo "Already up to date with upstream." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.merge.outputs.result }}" = "failed" ]; then
+            echo "Sync **failed**. Manual intervention required." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Merged **${{ steps.check.outputs.behind }}** upstream commit(s). Fork edits preserved on any conflicts." >> "$GITHUB_STEP_SUMMARY"
+            echo "Merged **${{ steps.check.outputs.behind }}** upstream commit(s) (${{ steps.merge.outputs.result }}). Fork edits preserved." >> "$GITHUB_STEP_SUMMARY"
           fi
