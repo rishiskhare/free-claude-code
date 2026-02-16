@@ -55,7 +55,9 @@ async def create_message(
         # Per-session model override via auth token (freecc:org/model-name)
         model_override = _parse_model_override(raw_request)
         if model_override:
-            logger.info(f"Model override via token: {request_data.model} -> {model_override}")
+            logger.info(
+                f"Model override via token: {request_data.model} -> {model_override}"
+            )
             request_data.model = model_override
 
         optimized = try_optimizations(request_data, settings)
@@ -126,7 +128,9 @@ async def list_models():
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="nvidia_nim_models.json not found")
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Invalid JSON in nvidia_nim_models.json")
+        raise HTTPException(
+            status_code=500, detail="Invalid JSON in nvidia_nim_models.json"
+        )
 
 
 @router.get("/")
