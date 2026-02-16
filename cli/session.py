@@ -3,12 +3,10 @@
 import asyncio
 import os
 import json
-import logging
-from typing import AsyncGenerator, Optional, Dict, List, Any
+from typing import AsyncGenerator, Optional, List, Any
 
 from .process_registry import register_pid, unregister_pid
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class CLISession:
@@ -203,7 +201,7 @@ class CLISession:
 
             yield event
         except json.JSONDecodeError:
-            logger.debug(f"Non-JSON output: {line_str[:100]}")
+            logger.debug(f"Non-JSON output: {line_str}")
             yield {"type": "raw", "content": line_str}
 
     def _extract_session_id(self, event: Any) -> Optional[str]:

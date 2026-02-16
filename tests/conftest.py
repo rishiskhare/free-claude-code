@@ -1,3 +1,4 @@
+import logging
 import pytest
 import asyncio
 import os
@@ -11,6 +12,7 @@ os.environ["PTB_TIMEDELTA"] = "1"
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from providers.base import ProviderConfig
 from providers.nvidia_nim import NvidiaNimProvider
@@ -34,6 +36,27 @@ def provider_config():
 @pytest.fixture
 def nim_provider(provider_config):
     return NvidiaNimProvider(provider_config)
+
+
+@pytest.fixture
+def open_router_provider(provider_config):
+    from providers.open_router import OpenRouterProvider
+
+    return OpenRouterProvider(provider_config)
+
+
+@pytest.fixture
+def lmstudio_provider(provider_config):
+    from providers.lmstudio import LMStudioProvider
+
+    lmstudio_config = ProviderConfig(
+        api_key="lm-studio",
+        base_url="http://localhost:1234/v1",
+        rate_limit=provider_config.rate_limit,
+        rate_window=provider_config.rate_window,
+        nim_settings=provider_config.nim_settings,
+    )
+    return LMStudioProvider(lmstudio_config)
 
 
 @pytest.fixture
@@ -91,8 +114,22 @@ def mock_session_store():
 
 @pytest.fixture
 def incoming_message_factory():
+    _valid_keys = frozenset(
+        {
+            "text",
+            "chat_id",
+            "user_id",
+            "message_id",
+            "platform",
+            "reply_to_message_id",
+            "username",
+            "timestamp",
+            "raw_event",
+        }
+    )
+
     def _create(**kwargs):
-        defaults = {
+        defaults: dict[str, Any] = {
             "text": "hello",
             "chat_id": "chat_1",
             "user_id": "user_1",
@@ -104,6 +141,28 @@ def incoming_message_factory():
             from datetime import datetime
 
             defaults["timestamp"] = datetime.fromisoformat(defaults["timestamp"])
-        return IncomingMessage(**defaults)  # type: ignore
+        filtered = {k: v for k, v in defaults.items() if k in _valid_keys}
+        return IncomingMessage(**filtered)
 
     return _create
+
+
+@pytest.fixture(autouse=True)
+def _propagate_loguru_to_caplog():
+    """Route loguru logs to stdlib logging so pytest caplog captures them."""
+    from loguru import logger as loguru_logger
+
+    class _PropagateHandler:
+        def write(self, message):
+            record = message.record
+            level = record["level"].no
+            stdlib_level = min(level, logging.CRITICAL)
+            py_logger = logging.getLogger(record["name"])
+            py_logger.log(stdlib_level, record["message"])
+
+    handler_id = loguru_logger.add(_PropagateHandler(), format="{message}")
+    yield
+    try:
+        loguru_logger.remove(handler_id)
+    except ValueError:
+        pass  # Handler already removed (e.g. by test_logging_config tests)

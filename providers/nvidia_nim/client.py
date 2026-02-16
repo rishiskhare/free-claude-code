@@ -1,16 +1,15 @@
 """NVIDIA NIM provider implementation."""
 
-import logging
 import json
 import uuid
 from typing import Any, AsyncIterator
 
+from loguru import logger
 from openai import AsyncOpenAI
 
 from providers.base import BaseProvider, ProviderConfig
 from providers.rate_limit import GlobalRateLimiter
 from .request import build_request_body
-from .response import convert_response
 from .errors import map_error
 from .utils import (
     SSEBuilder,
@@ -19,8 +18,6 @@ from .utils import (
     HeuristicToolParser,
     ContentType,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class NvidiaNimProvider(BaseProvider):
@@ -44,20 +41,42 @@ class NvidiaNimProvider(BaseProvider):
             timeout=300.0,
         )
 
-    def _build_request_body(self, request: Any, stream: bool = False) -> dict:
+    def _build_request_body(self, request: Any) -> dict:
         """Internal helper for tests and shared building."""
-        return build_request_body(request, self._nim_settings, stream=stream)
+        return build_request_body(request, self._nim_settings)
 
     async def stream_response(
-        self, request: Any, input_tokens: int = 0
+        self,
+        request: Any,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream response in Anthropic SSE format."""
+        with logger.contextualize(request_id=request_id):
+            async for event in self._stream_response_impl(
+                request, input_tokens, request_id
+            ):
+                yield event
+
+    async def _stream_response_impl(
+        self,
+        request: Any,
+        input_tokens: int,
+        request_id: str | None,
+    ) -> AsyncIterator[str]:
+        """Internal streaming implementation with context bound."""
         message_id = f"msg_{uuid.uuid4()}"
         sse = SSEBuilder(message_id, request.model, input_tokens)
 
-        body = self._build_request_body(request, stream=True)
+        body = self._build_request_body(request)
+        req_tag = f" request_id={request_id}" if request_id else ""
         logger.info(
-            f"NIM_STREAM: model={body.get('model')} msgs={len(body.get('messages', []))} tools={len(body.get('tools', []))}"
+            "NIM_STREAM:%s model=%s msgs=%d tools=%d",
+            req_tag,
+            body.get("model"),
+            len(body.get("messages", [])),
+            len(body.get("tools", [])),
         )
 
         yield sse.message_start()
@@ -84,6 +103,8 @@ class NvidiaNimProvider(BaseProvider):
 
                 choice = chunk.choices[0]
                 delta = choice.delta
+                if delta is None:
+                    continue
 
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
@@ -153,11 +174,16 @@ class NvidiaNimProvider(BaseProvider):
                             yield event
 
         except Exception as e:
-            logger.error(f"NIM_ERROR: {type(e).__name__}: {e}")
+            req_tag = f" request_id={request_id}" if request_id else ""
+            logger.error("NIM_ERROR:%s %s: %s", req_tag, type(e).__name__, e)
             mapped_e = map_error(e)
             error_occurred = True
             error_message = str(mapped_e)
-            logger.info(f"NIM_STREAM: Emitting SSE error event for {type(e).__name__}")
+            logger.info(
+                "NIM_STREAM: Emitting SSE error event for %s%s",
+                type(e).__name__,
+                req_tag,
+            )
             # Ensure open blocks are closed before emitting error to follow Anthropic protocol
             for event in sse.close_content_blocks():
                 yield event
@@ -219,39 +245,19 @@ class NvidiaNimProvider(BaseProvider):
             if usage_info and hasattr(usage_info, "completion_tokens")
             else sse.estimate_output_tokens()
         )
+        if usage_info and hasattr(usage_info, "prompt_tokens"):
+            provider_input = usage_info.prompt_tokens
+            if isinstance(provider_input, int):
+                diff = provider_input - input_tokens
+                logger.debug(
+                    f"TOKEN_ESTIMATE: our={input_tokens} provider={provider_input} diff={diff:+d}"
+                )
         yield sse.message_delta(map_stop_reason(finish_reason), output_tokens)
         yield sse.message_stop()
         yield sse.done()
 
-    async def complete(self, request: Any) -> dict:
-        """Make a non-streaming completion request."""
-        body = self._build_request_body(request, stream=False)
-        logger.info(
-            f"NIM_COMPLETE: model={body.get('model')} msgs={len(body.get('messages', []))} tools={len(body.get('tools', []))}"
-        )
-
-        try:
-            response = await self._global_rate_limiter.execute_with_retry(
-                self._client.chat.completions.create, **body
-            )
-            # Response converter expects a dict
-            return response.model_dump()
-        except Exception as e:
-            logger.error(f"NIM_ERROR: {type(e).__name__}: {e}")
-            raise map_error(e)
-
-    def convert_response(self, response_json: dict, original_request: Any) -> Any:
-        """Convert provider response to Anthropic format."""
-        return convert_response(response_json, original_request)
-
     def _process_tool_call(self, tc: dict, sse: Any):
-        """Process a single tool call delta and yield SSE events.
-
-        Args:
-            tc: Tool call delta info dict
-            sse: SSEBuilder instance
-        """
-
+        """Process a single tool call delta and yield SSE events."""
         tc_index = tc.get("index", 0)
         if tc_index < 0:
             tc_index = len(sse.blocks.tool_indices)
@@ -259,22 +265,7 @@ class NvidiaNimProvider(BaseProvider):
         fn_delta = tc.get("function", {})
         incoming_name = fn_delta.get("name")
         if incoming_name is not None:
-            # Some providers stream tool names as fragments; others resend the full name.
-            # Avoid "TaskTask" while still supporting fragment streams.
-            prev = sse.blocks.tool_names.get(tc_index, "")
-            if not prev:
-                sse.blocks.tool_names[tc_index] = incoming_name
-            elif prev == incoming_name:
-                pass
-            elif isinstance(prev, str) and isinstance(incoming_name, str):
-                if incoming_name.startswith(prev):
-                    sse.blocks.tool_names[tc_index] = incoming_name
-                elif prev.startswith(incoming_name):
-                    pass
-                else:
-                    sse.blocks.tool_names[tc_index] = prev + incoming_name
-            else:
-                sse.blocks.tool_names[tc_index] = str(prev) + str(incoming_name)
+            sse.blocks.register_tool_name(tc_index, incoming_name)
 
         if tc_index not in sse.blocks.tool_indices:
             name = sse.blocks.tool_names.get(tc_index, "")
@@ -295,80 +286,19 @@ class NvidiaNimProvider(BaseProvider):
             if not sse.blocks.tool_started.get(tc_index):
                 tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
                 name = sse.blocks.tool_names.get(tc_index, "tool_call") or "tool_call"
-
                 yield sse.start_tool_block(tc_index, tool_id, name)
                 sse.blocks.tool_started[tc_index] = True
 
             current_name = sse.blocks.tool_names.get(tc_index, "")
-            # INTERCEPTION: Task args can stream in many partial chunks. Buffer until we
-            # have valid JSON, then emit a single delta with run_in_background forced off.
             if current_name == "Task":
-                # Allow older tests to pass with MagicMock'd builders by lazily creating fields.
-                if not isinstance(getattr(sse.blocks, "task_arg_buffer", None), dict):
-                    sse.blocks.task_arg_buffer = {}
-                if not isinstance(getattr(sse.blocks, "task_args_emitted", None), dict):
-                    sse.blocks.task_args_emitted = {}
-                if not isinstance(getattr(sse.blocks, "tool_ids", None), dict):
-                    sse.blocks.tool_ids = {}
-
-                if not sse.blocks.task_args_emitted.get(tc_index, False):
-                    buf = sse.blocks.task_arg_buffer.get(tc_index, "") + args
-                    sse.blocks.task_arg_buffer[tc_index] = buf
-                    try:
-                        args_json = json.loads(buf)
-                    except Exception:
-                        return
-                    if args_json.get("run_in_background") is not False:
-                        logger.info(
-                            "NIM_INTERCEPT: Forcing run_in_background=False for Task %s",
-                            (
-                                tc.get("id")
-                                or sse.blocks.tool_ids.get(tc_index, "unknown")
-                            ),
-                        )
-                        args_json["run_in_background"] = False
-                    sse.blocks.task_args_emitted[tc_index] = True
-                    sse.blocks.task_arg_buffer.pop(tc_index, None)
-                    yield sse.emit_tool_delta(tc_index, json.dumps(args_json))
+                parsed = sse.blocks.buffer_task_args(tc_index, args)
+                if parsed is not None:
+                    yield sse.emit_tool_delta(tc_index, json.dumps(parsed))
                 return
 
             yield sse.emit_tool_delta(tc_index, args)
 
     def _flush_task_arg_buffers(self, sse: Any):
         """Emit buffered Task args as a single JSON delta (best-effort)."""
-        if not isinstance(getattr(sse.blocks, "task_arg_buffer", None), dict):
-            return
-        if not isinstance(getattr(sse.blocks, "task_args_emitted", None), dict):
-            sse.blocks.task_args_emitted = {}
-        if not isinstance(getattr(sse.blocks, "tool_ids", None), dict):
-            sse.blocks.tool_ids = {}
-        # Iterate over a copy; we will mutate dicts.
-        for tool_index, buf in list(getattr(sse.blocks, "task_arg_buffer", {}).items()):
-            if sse.blocks.task_args_emitted.get(tool_index, False):
-                sse.blocks.task_arg_buffer.pop(tool_index, None)
-                continue
-
-            tool_id = sse.blocks.tool_ids.get(tool_index, "unknown")
-            out = "{}"
-            try:
-                args_json = json.loads(buf)
-                if args_json.get("run_in_background") is not False:
-                    logger.info(
-                        "NIM_INTERCEPT: Forcing run_in_background=False for Task %s",
-                        tool_id,
-                    )
-                    args_json["run_in_background"] = False
-                out = json.dumps(args_json)
-            except Exception as e:
-                prefix = buf[:120]
-                logger.warning(
-                    "NIM_INTERCEPT: Task args invalid JSON (id=%s len=%d prefix=%r): %s",
-                    tool_id,
-                    len(buf),
-                    prefix,
-                    e,
-                )
-
-            sse.blocks.task_args_emitted[tool_index] = True
-            sse.blocks.task_arg_buffer.pop(tool_index, None)
+        for tool_index, out in sse.blocks.flush_task_arg_buffers():
             yield sse.emit_tool_delta(tool_index, out)

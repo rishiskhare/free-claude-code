@@ -21,8 +21,8 @@ class TestSettings:
         from config.settings import Settings
 
         settings = Settings()
-        assert isinstance(settings.nvidia_nim_rate_limit, int)
-        assert isinstance(settings.nvidia_nim_rate_window, int)
+        assert isinstance(settings.provider_rate_limit, int)
+        assert isinstance(settings.provider_rate_window, int)
         assert isinstance(settings.nim.temperature, float)
         assert isinstance(settings.fast_prefix_detection, bool)
         assert isinstance(settings.max_cli_sessions, int)
@@ -56,6 +56,30 @@ class TestSettings:
         from config.settings import NVIDIA_NIM_BASE_URL
 
         assert NVIDIA_NIM_BASE_URL == "https://integrate.api.nvidia.com/v1"
+
+    def test_lm_studio_base_url_from_env(self, monkeypatch):
+        """LM_STUDIO_BASE_URL env var is loaded into settings."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("LM_STUDIO_BASE_URL", "http://custom:5678/v1")
+        settings = Settings()
+        assert settings.lm_studio_base_url == "http://custom:5678/v1"
+
+    def test_provider_rate_limit_from_env(self, monkeypatch):
+        """PROVIDER_RATE_LIMIT env var is loaded into settings."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("PROVIDER_RATE_LIMIT", "20")
+        settings = Settings()
+        assert settings.provider_rate_limit == 20
+
+    def test_provider_rate_window_from_env(self, monkeypatch):
+        """PROVIDER_RATE_WINDOW env var is loaded into settings."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("PROVIDER_RATE_WINDOW", "30")
+        settings = Settings()
+        assert settings.provider_rate_window == 30
 
 
 # --- NimSettings Validation Tests ---
@@ -151,8 +175,10 @@ class TestNimSettingsInvalidBounds:
             NimSettings(min_tokens=-1)
 
     def test_reasoning_effort_invalid(self):
+        from typing import Any, cast
+
         with pytest.raises(ValidationError):
-            NimSettings(reasoning_effort="invalid")
+            NimSettings(reasoning_effort=cast(Any, "invalid"))
 
 
 class TestNimSettingsValidators:
@@ -187,8 +213,10 @@ class TestNimSettingsValidators:
 
     def test_extra_forbid_rejects_unknown_field(self):
         """NimSettings with extra='forbid' rejects unknown fields."""
+        from typing import Any, cast
+
         with pytest.raises(ValidationError):
-            NimSettings(unknown_field="value")
+            NimSettings(**cast(Any, {"unknown_field": "value"}))
 
 
 class TestSettingsOptionalStr:
@@ -214,3 +242,31 @@ class TestSettingsOptionalStr:
         monkeypatch.setenv("ALLOWED_TELEGRAM_USER_ID", "")
         s = Settings()
         assert s.allowed_telegram_user_id is None
+
+    def test_discord_bot_token_from_env(self, monkeypatch):
+        from config.settings import Settings
+
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord_token_123")
+        s = Settings()
+        assert s.discord_bot_token == "discord_token_123"
+
+    def test_empty_discord_bot_token_to_none(self, monkeypatch):
+        from config.settings import Settings
+
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "")
+        s = Settings()
+        assert s.discord_bot_token is None
+
+    def test_allowed_discord_channels_from_env(self, monkeypatch):
+        from config.settings import Settings
+
+        monkeypatch.setenv("ALLOWED_DISCORD_CHANNELS", "111,222,333")
+        s = Settings()
+        assert s.allowed_discord_channels == "111,222,333"
+
+    def test_messaging_platform_from_env(self, monkeypatch):
+        from config.settings import Settings
+
+        monkeypatch.setenv("MESSAGING_PLATFORM", "discord")
+        s = Settings()
+        assert s.messaging_platform == "discord"

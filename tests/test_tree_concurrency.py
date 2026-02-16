@@ -1,7 +1,6 @@
 """Concurrency and race condition tests for tree data structures and queue manager."""
 
 import pytest
-import pytest_asyncio
 import asyncio
 
 from messaging.models import IncomingMessage
@@ -112,6 +111,7 @@ class TestMessageTreeConcurrency:
 
         for i in range(5):
             node = tree.get_node(f"n{i}")
+            assert node is not None
             assert node.state == MessageState.IN_PROGRESS
 
     @pytest.mark.asyncio
@@ -321,6 +321,7 @@ class TestTreeQueueManagerConcurrency:
         results = await asyncio.gather(*[add_reply(i) for i in range(5)])
         assert len(results) == 5
         tree = mgr.get_tree("root")
+        assert tree is not None
         assert len(tree.all_nodes()) == 6  # root + 5 replies
 
     @pytest.mark.asyncio
@@ -341,7 +342,7 @@ class TestTreeQueueManagerConcurrency:
     async def test_enqueue_and_process(self):
         """Enqueue should process immediately if tree is free."""
         mgr = TreeQueueManager()
-        tree = await mgr.create_tree("root", _make_incoming(msg_id="root"), "s_root")
+        await mgr.create_tree("root", _make_incoming(msg_id="root"), "s_root")
 
         processed = []
 
@@ -360,7 +361,7 @@ class TestTreeQueueManagerConcurrency:
     async def test_enqueue_queues_when_busy(self):
         """Enqueue should queue when tree is already processing."""
         mgr = TreeQueueManager()
-        tree = await mgr.create_tree("root", _make_incoming(msg_id="root"), "s_root")
+        await mgr.create_tree("root", _make_incoming(msg_id="root"), "s_root")
         _, _ = await mgr.add_to_tree("root", "c1", _make_incoming(msg_id="c1"), "s1")
 
         processing_started = asyncio.Event()
@@ -444,7 +445,9 @@ class TestTreeQueueManagerConcurrency:
         assert count == 2
 
         root = tree.get_node("root")
+        assert root is not None
         assert root.state == MessageState.ERROR
+        assert root.error_message is not None
         assert "restart" in root.error_message
 
     @pytest.mark.asyncio
@@ -459,6 +462,7 @@ class TestTreeQueueManagerConcurrency:
         # root + c1 + c2 should all be marked
         assert len(affected) >= 1
         root = tree.get_node("root")
+        assert root is not None
         assert root.state == MessageState.ERROR
 
     @pytest.mark.asyncio
@@ -579,7 +583,7 @@ class TestTreeQueueManagerConcurrency:
             queue_update_callback=on_queue_update,
             node_started_callback=on_node_started,
         )
-        tree = await mgr.create_tree("root", _make_incoming(msg_id="root"), "s_root")
+        await mgr.create_tree("root", _make_incoming(msg_id="root"), "s_root")
         _, _ = await mgr.add_to_tree("root", "c1", _make_incoming(msg_id="c1"), "s1")
 
         blocker = asyncio.Event()

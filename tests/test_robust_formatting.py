@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import MagicMock
-from messaging.handler import escape_md_v2
 from messaging.transcript import TranscriptBuffer, RenderCtx
-from messaging.handler import (
+from messaging.telegram_markdown import (
+    escape_md_v2,
     escape_md_v2_code,
     mdv2_bold,
     mdv2_code_inline,
@@ -68,3 +68,22 @@ def test_empty_components_with_status(handler):
     t = TranscriptBuffer()
     msg = t.render(_ctx(), limit_chars=3900, status=status)
     assert msg == "\n\nSimple Status"
+
+
+def test_render_markdown_unclosed_markdown():
+    """Malformed markdown (e.g. unclosed *) does not crash and produces acceptable output."""
+    from messaging.telegram_markdown import render_markdown_to_mdv2
+
+    md = "*bold without close"
+    out = render_markdown_to_mdv2(md)
+    assert out is not None
+    assert "bold" in out
+
+
+def test_escape_md_v2_unicode_emoji():
+    """Unicode and emoji pass through correctly (no special char escaping needed)."""
+    from messaging.telegram_markdown import escape_md_v2, escape_md_v2_code
+
+    text = "Hello 世界 🎉 café"
+    assert escape_md_v2(text) == text
+    assert escape_md_v2_code(text) == text

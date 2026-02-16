@@ -1,7 +1,9 @@
 """Providers package - implement your own provider by extending BaseProvider."""
 
 from .base import BaseProvider, ProviderConfig
+from .lmstudio import LMStudioProvider
 from .nvidia_nim import NvidiaNimProvider
+from .open_router import OpenRouterProvider
 from .exceptions import (
     ProviderError,
     AuthenticationError,
@@ -14,7 +16,9 @@ from .exceptions import (
 __all__ = [
     "BaseProvider",
     "ProviderConfig",
+    "LMStudioProvider",
     "NvidiaNimProvider",
+    "OpenRouterProvider",
     "ProviderError",
     "AuthenticationError",
     "InvalidRequestError",

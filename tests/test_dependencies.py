@@ -1,7 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from api.dependencies import get_provider, get_settings, cleanup_provider
+from providers.lmstudio import LMStudioProvider
 from providers.nvidia_nim import NvidiaNimProvider
+from providers.open_router import OpenRouterProvider
 from config.nim import NimSettings
 
 
@@ -10,8 +12,10 @@ def _make_mock_settings(**overrides):
     mock = MagicMock()
     mock.provider_type = "nvidia_nim"
     mock.nvidia_nim_api_key = "test_key"
-    mock.nvidia_nim_rate_limit = 40
-    mock.nvidia_nim_rate_window = 60
+    mock.provider_rate_limit = 40
+    mock.provider_rate_window = 60
+    mock.open_router_api_key = "test_openrouter_key"
+    mock.lm_studio_base_url = "http://localhost:1234/v1"
     mock.nim = NimSettings()
     for key, value in overrides.items():
         setattr(mock, key, value)
@@ -53,6 +57,7 @@ async def test_cleanup_provider():
         mock_settings.return_value = _make_mock_settings()
 
         provider = get_provider()
+        assert isinstance(provider, NvidiaNimProvider)
         provider._client = AsyncMock()
 
         await cleanup_provider()
@@ -74,6 +79,47 @@ async def test_cleanup_provider_no_client():
 
 
 @pytest.mark.asyncio
+async def test_get_provider_open_router():
+    """Test that provider_type=open_router returns OpenRouterProvider."""
+    with patch("api.dependencies.get_settings") as mock_settings:
+        mock_settings.return_value = _make_mock_settings(provider_type="open_router")
+
+        provider = get_provider()
+
+        assert isinstance(provider, OpenRouterProvider)
+        assert provider._base_url == "https://openrouter.ai/api/v1"
+        assert provider._api_key == "test_openrouter_key"
+
+
+@pytest.mark.asyncio
+async def test_get_provider_lmstudio():
+    """Test that provider_type=lmstudio returns LMStudioProvider."""
+    with patch("api.dependencies.get_settings") as mock_settings:
+        mock_settings.return_value = _make_mock_settings(provider_type="lmstudio")
+
+        provider = get_provider()
+
+        assert isinstance(provider, LMStudioProvider)
+        assert provider._base_url == "http://localhost:1234/v1"
+        assert provider._api_key == "lm-studio"
+
+
+@pytest.mark.asyncio
+async def test_get_provider_lmstudio_uses_lm_studio_base_url():
+    """LM Studio provider uses lm_studio_base_url from settings."""
+    with patch("api.dependencies.get_settings") as mock_settings:
+        mock_settings.return_value = _make_mock_settings(
+            provider_type="lmstudio",
+            lm_studio_base_url="http://custom:9999/v1",
+        )
+
+        provider = get_provider()
+
+        assert isinstance(provider, LMStudioProvider)
+        assert provider._base_url == "http://custom:9999/v1"
+
+
+@pytest.mark.asyncio
 async def test_get_provider_unknown_type():
     """Test that unknown provider_type raises ValueError."""
     with patch("api.dependencies.get_settings") as mock_settings:
@@ -90,6 +136,7 @@ async def test_cleanup_provider_aclose_raises():
         mock_settings.return_value = _make_mock_settings()
 
         provider = get_provider()
+        assert isinstance(provider, NvidiaNimProvider)
         provider._client = AsyncMock()
         provider._client.aclose = AsyncMock(side_effect=RuntimeError("cleanup failed"))
 

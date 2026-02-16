@@ -1,6 +1,5 @@
 """Pydantic models for Anthropic-compatible requests."""
 
-import logging
 from enum import Enum
 from typing import List, Dict, Any, Optional, Union, Literal
 
@@ -8,8 +7,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 from config.settings import get_settings
 from providers.model_utils import normalize_model_name
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # =============================================================================
@@ -99,7 +97,7 @@ class MessagesRequest(BaseModel):
     messages: List[Message]
     system: Optional[Union[str, List[SystemContent]]] = None
     stop_sequences: Optional[List[str]] = None
-    stream: Optional[bool] = False
+    stream: Optional[bool] = True
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     top_k: Optional[int] = None

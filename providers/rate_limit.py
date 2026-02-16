@@ -4,14 +4,12 @@ import asyncio
 from collections import deque
 import random
 import time
-import logging
 from typing import Any, Callable, Optional, TypeVar
 
 import openai
+from loguru import logger
 
 T = TypeVar("T")
-
-logger = logging.getLogger(__name__)
 
 
 class GlobalRateLimiter:
@@ -193,4 +191,5 @@ class GlobalRateLimiter:
                 self.set_blocked(delay)
                 await asyncio.sleep(delay)
 
-        raise last_exc  # type: ignore[misc]
+        assert last_exc is not None
+        raise last_exc

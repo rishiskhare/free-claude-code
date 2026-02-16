@@ -1,6 +1,7 @@
-from messaging.transcript import TranscriptBuffer, RenderCtx
+from unittest.mock import patch
 
-from messaging.handler import (
+from messaging.transcript import TranscriptBuffer, RenderCtx
+from messaging.telegram_markdown import (
     escape_md_v2,
     escape_md_v2_code,
     mdv2_bold,
@@ -124,6 +125,20 @@ def test_transcript_truncates_by_dropping_oldest_segments():
     assert escape_md_v2("segment_0") not in out
 
 
+def test_transcript_render_many_segments_completes_quickly():
+    """Render with 200+ segments exercises O(n) truncation (deque popleft)."""
+    t = TranscriptBuffer()
+    for i in range(200):
+        t.apply({"type": "text_start", "index": i})
+        t.apply({"type": "text_delta", "index": i, "text": f"seg_{i} " + ("y" * 80)})
+        t.apply({"type": "block_stop", "index": i})
+
+    out = t.render(_ctx(), limit_chars=500, status="ok")
+    assert escape_md_v2("... (truncated)") in out
+    assert "199" in out  # last segment (MarkdownV2 escapes underscores)
+    assert "seg_0 " not in out  # oldest segment dropped
+
+
 def test_transcript_reused_index_closes_previous_open_block():
     t = TranscriptBuffer()
     # Open a text block at index 0, but never close it.
@@ -136,3 +151,32 @@ def test_transcript_reused_index_closes_previous_open_block():
     # Old open text should have been closed.
     assert 0 not in t._open_text_by_index
     assert 0 in t._open_tools_by_index
+
+
+def test_transcript_render_segment_exception_skipped():
+    """When a segment's render() raises, that segment is skipped and rest is rendered."""
+    t = TranscriptBuffer()
+    t.apply({"type": "thinking_chunk", "text": "before"})
+    t.apply({"type": "text_chunk", "text": "middle"})
+    t.apply({"type": "text_chunk", "text": "after"})
+
+    bad_segment = t._segments[1]
+
+    def _raising_render(self, ctx):
+        raise ValueError("render failed")
+
+    with patch.object(bad_segment, "render", _raising_render):
+        out = t.render(_ctx(), limit_chars=3900, status=None)
+    assert "before" in out
+    assert "after" in out
+    assert "middle" not in out
+
+
+def test_transcript_render_status_only_exceeds_limit():
+    """When all segments dropped, status-only output; long status returned as-is."""
+    t = TranscriptBuffer()
+    t.apply({"type": "text_chunk", "text": "x" * 5000})
+
+    long_status = "A" * 500
+    msg = t.render(_ctx(), limit_chars=100, status=long_status)
+    assert "... (truncated)" in msg or long_status in msg

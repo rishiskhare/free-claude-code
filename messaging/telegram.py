@@ -5,7 +5,6 @@ Implements MessagingPlatform for Telegram using python-telegram-bot.
 """
 
 import asyncio
-import logging
 import os
 
 # Opt-in to future behavior for python-telegram-bot (retry_after as timedelta)
@@ -14,22 +13,16 @@ os.environ["PTB_TIMEDELTA"] = "1"
 
 from typing import Callable, Awaitable, Optional, Any
 
+from loguru import logger
+
 from .base import MessagingPlatform
 from .models import IncomingMessage
-
-logger = logging.getLogger(__name__)
-
-# Telegram MarkdownV2 escaping for inline strings.
-MDV2_SPECIAL_CHARS = set("\\_*[]()~`>#+-=|{}.!")
-
-
-def escape_md_v2(text: str) -> str:
-    return "".join(f"\\{ch}" if ch in MDV2_SPECIAL_CHARS else ch for ch in text)
+from .telegram_markdown import escape_md_v2
 
 
 # Optional import - python-telegram-bot may not be installed
 try:
-    from telegram import Update, Bot
+    from telegram import Update
     from telegram.ext import (
         Application,
         CommandHandler,
@@ -168,14 +161,12 @@ class TelegramPlatform(MessagingPlatform):
     ) -> Any:
         """Helper to execute a function with exponential backoff on network errors."""
         max_retries = 3
-        last_error = None
         for attempt in range(max_retries):
             try:
                 return await func(*args, **kwargs)
             except (NetworkError, asyncio.TimeoutError) as e:
                 if "Message is not modified" in str(e):
                     return None
-                last_error = e
                 if attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s, 4s
                     logger.warning(
@@ -188,10 +179,12 @@ class TelegramPlatform(MessagingPlatform):
                     )
                     raise
             except RetryAfter as e:
-                # Telegram explicitly tells us to wait
+                # Telegram explicitly tells us to wait (PTB_TIMEDELTA: retry_after is timedelta)
+                from datetime import timedelta
+
                 retry_after = e.retry_after
-                if hasattr(retry_after, "total_seconds"):
-                    wait_secs = float(retry_after.total_seconds())  # type: ignore
+                if isinstance(retry_after, timedelta):
+                    wait_secs = retry_after.total_seconds()
                 else:
                     wait_secs = float(retry_after)
 
@@ -230,11 +223,12 @@ class TelegramPlatform(MessagingPlatform):
         parse_mode: Optional[str] = "MarkdownV2",
     ) -> str:
         """Send a message to a chat."""
-        if not self._application or not self._application.bot:
+        app = self._application
+        if not app or not app.bot:
             raise RuntimeError("Telegram application or bot not initialized")
 
         async def _do_send(parse_mode=parse_mode):
-            bot = self._application.bot  # type: ignore
+            bot = app.bot
             msg = await bot.send_message(
                 chat_id=chat_id,
                 text=text,
@@ -253,11 +247,12 @@ class TelegramPlatform(MessagingPlatform):
         parse_mode: Optional[str] = "MarkdownV2",
     ) -> None:
         """Edit an existing message."""
-        if not self._application or not self._application.bot:
+        app = self._application
+        if not app or not app.bot:
             raise RuntimeError("Telegram application or bot not initialized")
 
         async def _do_edit(parse_mode=parse_mode):
-            bot = self._application.bot  # type: ignore
+            bot = app.bot
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=int(message_id),
@@ -273,11 +268,12 @@ class TelegramPlatform(MessagingPlatform):
         message_id: str,
     ) -> None:
         """Delete a message from a chat."""
-        if not self._application or not self._application.bot:
+        app = self._application
+        if not app or not app.bot:
             raise RuntimeError("Telegram application or bot not initialized")
 
         async def _do_delete():
-            bot = self._application.bot  # type: ignore
+            bot = app.bot
             await bot.delete_message(chat_id=chat_id, message_id=int(message_id))
 
         await self._with_retry(_do_delete)
@@ -286,11 +282,12 @@ class TelegramPlatform(MessagingPlatform):
         """Delete multiple messages (best-effort)."""
         if not message_ids:
             return
-        if not self._application or not self._application.bot:
+        app = self._application
+        if not app or not app.bot:
             raise RuntimeError("Telegram application or bot not initialized")
 
         # PTB supports bulk deletion via delete_messages; fall back to per-message.
-        bot = self._application.bot  # type: ignore
+        bot = app.bot
         if hasattr(bot, "delete_messages"):
 
             async def _do_bulk():
@@ -303,7 +300,7 @@ class TelegramPlatform(MessagingPlatform):
                 if not mids:
                     return None
                 # delete_messages accepts a sequence of ints (up to 100).
-                await bot.delete_messages(chat_id=chat_id, message_ids=mids)  # type: ignore[attr-defined]
+                await bot.delete_messages(chat_id=chat_id, message_ids=mids)
 
             await self._with_retry(_do_bulk)
             return
@@ -399,7 +396,7 @@ class TelegramPlatform(MessagingPlatform):
     def fire_and_forget(self, task: Awaitable[Any]) -> None:
         """Execute a coroutine without awaiting it."""
         if asyncio.iscoroutine(task):
-            asyncio.create_task(task)  # type: ignore
+            asyncio.create_task(task)
         else:
             asyncio.ensure_future(task)
 
@@ -445,6 +442,23 @@ class TelegramPlatform(MessagingPlatform):
                 logger.warning(f"Unauthorized access attempt from {user_id}")
                 return
 
+        message_id = str(update.message.message_id)
+        reply_to = (
+            str(update.message.reply_to_message.message_id)
+            if update.message.reply_to_message
+            else None
+        )
+        text_preview = (update.message.text or "")[:80]
+        if len(update.message.text or "") > 80:
+            text_preview += "..."
+        logger.info(
+            "TELEGRAM_MSG: chat_id=%s message_id=%s reply_to=%s text_preview=%r",
+            chat_id,
+            message_id,
+            reply_to,
+            text_preview,
+        )
+
         if not self._message_handler:
             return
 
@@ -452,11 +466,9 @@ class TelegramPlatform(MessagingPlatform):
             text=update.message.text,
             chat_id=chat_id,
             user_id=user_id,
-            message_id=str(update.message.message_id),
+            message_id=message_id,
             platform="telegram",
-            reply_to_message_id=str(update.message.reply_to_message.message_id)
-            if update.message.reply_to_message
-            else None,
+            reply_to_message_id=reply_to,
             raw_event=update,
         )
 

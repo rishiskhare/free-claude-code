@@ -4,6 +4,7 @@ from typing import Any, Dict
 
 from config.nim import NimSettings
 from .utils.message_converter import AnthropicToOpenAIConverter
+from loguru import logger
 
 
 def _set_if_not_none(body: Dict[str, Any], key: str, value: Any) -> None:
@@ -23,10 +24,13 @@ def _set_extra(
     extra_body[key] = value
 
 
-def build_request_body(
-    request_data: Any, nim: NimSettings, stream: bool = False
-) -> dict:
+def build_request_body(request_data: Any, nim: NimSettings) -> dict:
     """Build OpenAI-format request body from Anthropic request."""
+    logger.debug(
+        "NIM_REQUEST: conversion start model=%s msgs=%d",
+        getattr(request_data, "model", "?"),
+        len(getattr(request_data, "messages", [])),
+    )
     messages = AnthropicToOpenAIConverter.convert_messages(request_data.messages)
 
     # Add system prompt
@@ -86,14 +90,17 @@ def build_request_body(
         extra_body.update(request_extra)
 
     # Handle thinking/reasoning mode
-    thinking = getattr(request_data, "thinking", None)
-    if thinking and getattr(thinking, "enabled", True):
-        extra_body.setdefault("thinking", {"type": "enabled"})
-        extra_body.setdefault("reasoning_split", True)
-        extra_body.setdefault(
-            "chat_template_kwargs",
-            {"thinking": True, "reasoning_split": True, "clear_thinking": False},
-        )
+    extra_body.setdefault("thinking", {"type": "enabled"})
+    extra_body.setdefault("reasoning_split", True)
+    extra_body.setdefault(
+        "chat_template_kwargs",
+        {
+            "thinking": True,
+            "enable_thinking": True,
+            "reasoning_split": True,
+            "clear_thinking": False,
+        },
+    )
 
     req_top_k = getattr(request_data, "top_k", None)
     top_k = req_top_k if req_top_k is not None else nim.top_k
@@ -114,4 +121,10 @@ def build_request_body(
     if extra_body:
         body["extra_body"] = extra_body
 
+    logger.debug(
+        "NIM_REQUEST: conversion done model=%s msgs=%d tools=%d",
+        body.get("model"),
+        len(body.get("messages", [])),
+        len(body.get("tools", [])),
+    )
     return body

@@ -5,8 +5,6 @@ Uses TreeRepository for data, TreeQueueProcessor for async logic.
 """
 
 import asyncio
-import logging
-from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, Awaitable, List, Optional
 
@@ -14,6 +12,7 @@ from .models import IncomingMessage
 from .tree_data import MessageState, MessageNode, MessageTree
 from .tree_repository import TreeRepository
 from .tree_processor import TreeQueueProcessor
+from loguru import logger
 
 # Backward compatibility: re-export moved classes
 __all__ = [
@@ -22,8 +21,6 @@ __all__ = [
     "MessageNode",
     "MessageTree",
 ]
-
-logger = logging.getLogger(__name__)
 
 
 class TreeQueueManager:
@@ -55,16 +52,6 @@ class TreeQueueManager:
         self._lock = asyncio.Lock()
 
         logger.info("TreeQueueManager initialized")
-
-    @property
-    def _trees(self):
-        """Access internal tree dict for backward compatibility."""
-        return self._repository._trees
-
-    @property
-    def _node_to_tree(self):
-        """Access internal node mapping for backward compatibility."""
-        return self._repository._node_to_tree
 
     async def create_tree(
         self,
@@ -117,11 +104,12 @@ class TreeQueueManager:
             Tuple of (tree, new_node)
         """
         async with self._lock:
-            if parent_node_id not in self._repository._node_to_tree:
+            if not self._repository.has_node(parent_node_id):
                 raise ValueError(f"Parent node {parent_node_id} not found in any tree")
 
-            root_id = self._repository._node_to_tree[parent_node_id]
-            tree = self._repository._trees[root_id]
+            tree = self._repository.get_tree_for_node(parent_node_id)
+            if not tree:
+                raise ValueError(f"Parent node {parent_node_id} not found in any tree")
 
         # Add node (tree has its own lock) - outside manager lock to avoid deadlock
         node = await tree.add_node(
@@ -132,9 +120,9 @@ class TreeQueueManager:
         )
 
         async with self._lock:
-            self._repository.register_node(node_id, root_id)
+            self._repository.register_node(node_id, tree.root_id)
 
-        logger.info(f"Added node {node_id} to tree {root_id}")
+        logger.info(f"Added node {node_id} to tree {tree.root_id}")
         return tree, node
 
     def get_tree(self, root_id: str) -> Optional[MessageTree]:
@@ -248,10 +236,11 @@ class TreeQueueManager:
 
         cancelled_nodes = []
 
-        # 1. Cancel running task via processor
-        if self._processor.cancel_current(tree):
-            if tree._current_node_id:
-                node = tree.get_node(tree._current_node_id)
+        # 1. Cancel running task
+        if tree.cancel_current_task():
+            current_id = tree.current_node_id
+            if current_id:
+                node = tree.get_node(current_id)
                 if node and node.state not in (
                     MessageState.COMPLETED,
                     MessageState.ERROR,
@@ -260,33 +249,23 @@ class TreeQueueManager:
                     node.error_message = "Cancelled by user"
                     cancelled_nodes.append(node)
 
-        # 2. Clear queue and update states
-        while not tree._queue.empty():
-            try:
-                node_id = tree._queue.get_nowait()
-                node = tree.get_node(node_id)
-                if node:
-                    node.state = MessageState.ERROR
-                    node.error_message = "Cancelled by user"
-                    cancelled_nodes.append(node)
-            except asyncio.QueueEmpty:
-                break
+        # 2. Drain queue and mark nodes as cancelled
+        queue_nodes = tree.drain_queue_and_mark_cancelled()
+        cancelled_nodes.extend(queue_nodes)
+        cancelled_ids = {n.node_id for n in cancelled_nodes}
 
         # 3. Cleanup: Mark ANY other PENDING or IN_PROGRESS nodes as ERROR
-        # This handles stale nodes from previous sessions without counting them as "cancelled now"
-        # unless they were in the active queue above.
         cleanup_count = 0
         for node in tree.all_nodes():
             if (
                 node.state in (MessageState.PENDING, MessageState.IN_PROGRESS)
-                and node not in cancelled_nodes
+                and node.node_id not in cancelled_ids
             ):
                 node.state = MessageState.ERROR
                 node.error_message = "Stale task cleaned up"
                 cleanup_count += 1
 
-        tree._is_processing = False
-        tree._current_node_id = None
+        tree.reset_processing_state()
 
         if cancelled_nodes:
             logger.info(
@@ -312,7 +291,7 @@ class TreeQueueManager:
         if not tree:
             return []
 
-        async with tree._lock:
+        async with tree.with_lock():
             node = tree.get_node(node_id)
             if not node:
                 return []
@@ -320,18 +299,12 @@ class TreeQueueManager:
             if node.state in (MessageState.COMPLETED, MessageState.ERROR):
                 return []
 
-            # Cancel running task if this is the current node.
-            if tree._current_node_id == node_id:
+            if tree.is_current_node(node_id):
                 self._processor.cancel_current(tree)
 
-            # Remove from queue if present (asyncio.Queue exposes its internal deque).
             try:
-                q = tree._queue._queue  # type: ignore[attr-defined]
-                if q and node_id in q:
-                    tree._queue._queue = deque(x for x in q if x != node_id)  # type: ignore[attr-defined]
+                tree.remove_from_queue(node_id)
             except Exception:
-                # Best-effort: if we can't mutate the queue internals, the node will
-                # still be dequeued later and skipped due to state=ERROR.
                 logger.debug(
                     "Failed to remove node from queue; will rely on state=ERROR"
                 )
@@ -375,7 +348,7 @@ class TreeQueueManager:
 
     def get_tree_count(self) -> int:
         """Get the number of active message trees."""
-        return len(self._repository._trees)
+        return self._repository.tree_count()
 
     def set_queue_update_callback(
         self,

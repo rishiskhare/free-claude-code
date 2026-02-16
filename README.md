@@ -1,8 +1,48 @@
-# free-claude-code
+<div align="center">
 
 Use **Claude Code CLI for free** with NVIDIA NIM's free API (unlimited usage, 40 requests/min). This lightweight proxy converts Claude Code's Anthropic API requests to NVIDIA NIM format. **Includes Telegram bot integration** for remote control from your phone!
 
-![Claude Code exploring cc-nim](pic.png)
+### Use Claude Code CLI & VSCode — for free. No Anthropic API key required.
+
+[![GitHub Stars](https://img.shields.io/github/stars/Alishahryar1/free-claude-code?style=for-the-badge&logo=github)](https://github.com/Alishahryar1/free-claude-code/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/Alishahryar1/free-claude-code?style=for-the-badge&logo=github)](https://github.com/Alishahryar1/free-claude-code/network/members)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
+
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=for-the-badge)](https://github.com/astral-sh/uv)
+[![Tested with Pytest](https://img.shields.io/badge/testing-Pytest-00c0ff.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/actions/workflows/tests.yml)
+[![Type checking: Ty](https://img.shields.io/badge/type%20checking-ty-ffcc00.svg?style=for-the-badge)](https://pypi.org/project/ty/)
+[![Code style: Ruff](https://img.shields.io/badge/code%20formatting-ruff-f5a623.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
+[![Logging: Loguru](https://img.shields.io/badge/logging-loguru-4ecdc4.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
+
+A lightweight proxy server that translates Claude Code's Anthropic API calls into **NVIDIA NIM**, **OpenRouter**, or **LM Studio** format.
+Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on OpenRouter, or run **fully local** with LM Studio.
+
+[Features](#features) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Discord Bot](#discord-bot) · [Configuration](#configuration)
+
+---
+
+</div>
+
+<div align="center">
+  <img src="pic.png" alt="Free Claude Code in action" width="700">
+  <p><em>Claude Code running via NVIDIA NIM — completely free</em></p>
+</div>
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **Zero Cost** | 40 req/min free on NVIDIA NIM. Free models on OpenRouter. Fully local with LM Studio |
+| **Drop-in Replacement** | Set 2 env vars — no modifications to Claude Code CLI or VSCode extension needed |
+| **3 Providers** | NVIDIA NIM, OpenRouter (hundreds of models), LM Studio (local & offline) |
+| **Thinking Token Support** | Parses `<think>` tags and `reasoning_content` into native Claude thinking blocks |
+| **Heuristic Tool Parser** | Models outputting tool calls as text are auto-parsed into structured tool use |
+| **Request Optimization** | 5 categories of trivial API calls intercepted locally — saves quota and latency |
+| **Discord Bot** | Remote autonomous coding with tree-based threading, session persistence, and live progress (Telegram also supported) |
+| **Smart Rate Limiting** | Proactive rolling-window throttle + reactive 429 exponential backoff across all providers |
+| **Subagent Control** | Task tool interception forces `run_in_background=False` — no runaway subagents |
+| **Extensible** | Clean `BaseProvider` and `MessagingPlatform` ABCs — add new providers or platforms easily |
 
 ---
 
@@ -109,7 +149,7 @@ Swap out the model ID after `freecc:` to use any model (see [Available Models](#
 
 ---
 
-## Available Models
+### Telegram (Alternative)
 
 The `claude-free` picker shows all of these automatically. Here are some popular ones:
 
@@ -125,6 +165,7 @@ The full list is in [`nvidia_nim_models.json`](nvidia_nim_models.json). Browse a
 
 To refresh the model list with the latest from NVIDIA:
 
+Update model list:
 ```bash
 curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 ```

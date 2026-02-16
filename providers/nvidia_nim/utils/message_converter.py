@@ -22,8 +22,17 @@ class AnthropicToOpenAIConverter:
     """Converts Anthropic message format to OpenAI format."""
 
     @staticmethod
-    def convert_messages(messages: List[Any]) -> List[Dict[str, Any]]:
-        """Convert a list of Anthropic messages to OpenAI format."""
+    def convert_messages(
+        messages: List[Any],
+        *,
+        include_reasoning_for_openrouter: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Convert a list of Anthropic messages to OpenAI format.
+
+        When include_reasoning_for_openrouter is True, assistant messages with
+        thinking blocks get reasoning_content added for OpenRouter multi-turn
+        reasoning continuation.
+        """
         result = []
 
         for msg in messages:
@@ -35,7 +44,10 @@ class AnthropicToOpenAIConverter:
             elif isinstance(content, list):
                 if role == "assistant":
                     result.extend(
-                        AnthropicToOpenAIConverter._convert_assistant_message(content)
+                        AnthropicToOpenAIConverter._convert_assistant_message(
+                            content,
+                            include_reasoning_for_openrouter=include_reasoning_for_openrouter,
+                        )
                     )
                 elif role == "user":
                     result.extend(
@@ -47,19 +59,26 @@ class AnthropicToOpenAIConverter:
         return result
 
     @staticmethod
-    def _convert_assistant_message(content: List[Any]) -> List[Dict[str, Any]]:
-        """Convert assistant message blocks."""
-        text_parts = []
-        tool_calls = []
-        reasoning_parts = []
+    def _convert_assistant_message(
+        content: List[Any],
+        *,
+        include_reasoning_for_openrouter: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Convert assistant message blocks, preserving interleaved thinking+text order."""
+        content_parts: List[str] = []
+        thinking_parts: List[str] = []
+        tool_calls: List[Dict[str, Any]] = []
 
         for block in content:
             block_type = get_block_type(block)
 
             if block_type == "text":
-                text_parts.append(get_block_attr(block, "text", ""))
+                content_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "thinking":
-                reasoning_parts.append(get_block_attr(block, "thinking", ""))
+                thinking = get_block_attr(block, "thinking", "")
+                content_parts.append(f"<think>\n{thinking}\n</think>")
+                if include_reasoning_for_openrouter:
+                    thinking_parts.append(thinking)
             elif block_type == "tool_use":
                 tool_input = get_block_attr(block, "input", {})
                 tool_calls.append(
@@ -75,18 +94,7 @@ class AnthropicToOpenAIConverter:
                     }
                 )
 
-        # Merge everything into content for NIM/Mistral compatibility
-        # Anthropic 'thinking' blocks are converted to <thought> tags
-        actual_content = []
-        if reasoning_parts:
-            # Join reasoning parts and handle as a separate block
-            reasoning_str = "\n".join(reasoning_parts)
-            actual_content.append(f"<think>\n{reasoning_str}\n</think>")
-
-        if text_parts:
-            actual_content.append("\n".join(text_parts))
-
-        content_str = "\n\n".join(actual_content)
+        content_str = "\n\n".join(content_parts)
 
         # Ensure content is never an empty string for assistant messages
         # NIM (especially Mistral models) requires non-empty content if there are no tool calls
@@ -99,14 +107,21 @@ class AnthropicToOpenAIConverter:
         }
         if tool_calls:
             msg["tool_calls"] = tool_calls
+        if include_reasoning_for_openrouter and thinking_parts:
+            msg["reasoning_content"] = "\n".join(thinking_parts)
 
         return [msg]
 
     @staticmethod
     def _convert_user_message(content: List[Any]) -> List[Dict[str, Any]]:
-        """Convert user message blocks (including tool results)."""
-        result = []
-        text_parts = []
+        """Convert user message blocks (including tool results), preserving order."""
+        result: List[Dict[str, Any]] = []
+        text_parts: List[str] = []
+
+        def flush_text() -> None:
+            if text_parts:
+                result.append({"role": "user", "content": "\n".join(text_parts)})
+                text_parts.clear()
 
         for block in content:
             block_type = get_block_type(block)
@@ -114,6 +129,7 @@ class AnthropicToOpenAIConverter:
             if block_type == "text":
                 text_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "tool_result":
+                flush_text()
                 tool_content = get_block_attr(block, "content", "")
                 if isinstance(tool_content, list):
                     tool_content = "\n".join(
@@ -130,9 +146,7 @@ class AnthropicToOpenAIConverter:
                     }
                 )
 
-        if text_parts:
-            result.append({"role": "user", "content": "\n".join(text_parts)})
-
+        flush_text()
         return result
 
     @staticmethod

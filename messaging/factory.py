@@ -6,12 +6,11 @@ To add a new platform (e.g. Discord, Slack):
 2. Add a case to create_messaging_platform() below
 """
 
-import logging
 from typing import Optional
 
-from .base import MessagingPlatform
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from .base import MessagingPlatform
 
 
 def create_messaging_platform(
@@ -40,12 +39,20 @@ def create_messaging_platform(
             allowed_user_id=kwargs.get("allowed_user_id"),
         )
 
-    # Add new platforms here:
-    # elif platform_type == "discord":
-    #     from .discord import DiscordPlatform
-    #     return DiscordPlatform(...)
+    if platform_type == "discord":
+        bot_token = kwargs.get("discord_bot_token")
+        if not bot_token:
+            logger.info("No Discord bot token configured, skipping platform setup")
+            return None
+
+        from .discord import DiscordPlatform
+
+        return DiscordPlatform(
+            bot_token=bot_token,
+            allowed_channel_ids=kwargs.get("allowed_discord_channels"),
+        )
 
     logger.warning(
-        f"Unknown messaging platform: '{platform_type}'. Supported: 'telegram'"
+        f"Unknown messaging platform: '{platform_type}'. Supported: 'telegram', 'discord'"
     )
     return None

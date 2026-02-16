@@ -4,15 +4,15 @@ Contains MessageState, MessageNode, and MessageTree classes.
 """
 
 import asyncio
-import logging
+from collections import deque
+from contextlib import asynccontextmanager
 from enum import Enum
 from datetime import datetime, timezone
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, cast
 from dataclasses import dataclass, field
 
 from .models import IncomingMessage
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class MessageState(Enum):
@@ -120,6 +120,9 @@ class MessageTree:
         """
         self.root_id = root_node.node_id
         self._nodes: Dict[str, MessageNode] = {root_node.node_id: root_node}
+        self._status_to_node: Dict[str, str] = {
+            root_node.status_message_id: root_node.node_id
+        }
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._lock = asyncio.Lock()
         self._is_processing = False
@@ -165,6 +168,7 @@ class MessageTree:
             )
 
             self._nodes[node_id] = node
+            self._status_to_node[status_message_id] = node_id
             self._nodes[parent_id].children_ids.append(node_id)
 
             logger.debug(f"Added node {node_id} as child of {parent_id}")
@@ -257,23 +261,92 @@ class MessageTree:
             List of node IDs in FIFO order.
         """
         async with self._lock:
-            # asyncio.Queue stores its items in a deque at _queue.
-            # We copy it here for safe, consistent reads.
-            return list(self._queue._queue)
+            # Read internal deque directly to avoid mutating queue state.
+            # Drain/put approach would inflate _unfinished_tasks without task_done().
+            queue_deque = cast(deque, getattr(self._queue, "_queue"))
+            return list(queue_deque)
 
     def get_queue_size(self) -> int:
         """Get number of messages waiting in queue."""
         return self._queue.qsize()
 
-    def get_queue_position(self, node_id: str) -> int:
+    def remove_from_queue(self, node_id: str) -> bool:
         """
-        Get position of a node in the queue.
+        Remove node_id from the internal queue if present.
 
-        Returns 0 if not in queue, 1+ for queue position.
+        Caller must hold the tree lock (e.g. via with_lock).
+        Returns True if node was removed, False if not in queue.
+
+        Note: asyncio.Queue has no built-in remove; we filter via the internal
+        deque. O(n) in queue size; acceptable for typical tree queue sizes.
         """
-        # Note: asyncio.Queue doesn't support direct iteration
-        # This is an approximation based on order
-        return 0  # TODO: Track positions separately if needed
+        queue_deque = cast(deque, getattr(self._queue, "_queue"))
+        if node_id not in queue_deque:
+            return False
+        object.__setattr__(
+            self._queue, "_queue", deque(x for x in queue_deque if x != node_id)
+        )
+        return True
+
+    @asynccontextmanager
+    async def with_lock(self):
+        """Async context manager for tree lock. Use when multiple operations need atomicity."""
+        async with self._lock:
+            yield
+
+    def set_processing_state(self, node_id: Optional[str], is_processing: bool) -> None:
+        """Set processing state. Caller must hold lock for consistency with queue operations."""
+        self._is_processing = is_processing
+        self._current_node_id = node_id if is_processing else None
+
+    def clear_current_node(self) -> None:
+        """Clear the currently processing node ID. Caller must hold lock."""
+        self._current_node_id = None
+
+    def is_current_node(self, node_id: str) -> bool:
+        """Check if node_id is the currently processing node."""
+        return self._current_node_id == node_id
+
+    def put_queue_unlocked(self, node_id: str) -> None:
+        """Add node to queue. Caller must hold lock (e.g. via with_lock)."""
+        self._queue.put_nowait(node_id)
+
+    def cancel_current_task(self) -> bool:
+        """Cancel the currently running task. Returns True if a task was cancelled."""
+        if self._current_task and not self._current_task.done():
+            self._current_task.cancel()
+            return True
+        return False
+
+    def drain_queue_and_mark_cancelled(
+        self, error_message: str = "Cancelled by user"
+    ) -> List["MessageNode"]:
+        """
+        Drain the queue, mark each node as ERROR, and return affected nodes.
+        Does not acquire lock; caller must ensure no concurrent queue access.
+        """
+        nodes: List[MessageNode] = []
+        while True:
+            try:
+                node_id = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            node = self._nodes.get(node_id)
+            if node:
+                node.state = MessageState.ERROR
+                node.error_message = error_message
+                nodes.append(node)
+        return nodes
+
+    def reset_processing_state(self) -> None:
+        """Reset processing flags after cancel/cleanup."""
+        self._is_processing = False
+        self._current_node_id = None
+
+    @property
+    def current_node_id(self) -> Optional[str]:
+        """Get the ID of the node currently being processed."""
+        return self._current_node_id
 
     def to_dict(self) -> dict:
         """Serialize tree to dictionary."""
@@ -292,10 +365,12 @@ class MessageTree:
         root_node = MessageNode.from_dict(nodes_data[root_id])
         tree = cls(root_node)
 
-        # Add remaining nodes
+        # Add remaining nodes and build status->node index
         for node_id, node_data in nodes_data.items():
             if node_id != root_id:
-                tree._nodes[node_id] = MessageNode.from_dict(node_data)
+                node = MessageNode.from_dict(node_data)
+                tree._nodes[node_id] = node
+                tree._status_to_node[node.status_message_id] = node_id
 
         return tree
 
@@ -308,8 +383,6 @@ class MessageTree:
         return node_id in self._nodes
 
     def find_node_by_status_message(self, status_msg_id: str) -> Optional[MessageNode]:
-        """Find the node that has this status message ID."""
-        for node in self._nodes.values():
-            if node.status_message_id == status_msg_id:
-                return node
-        return None
+        """Find the node that has this status message ID (O(1) lookup)."""
+        node_id = self._status_to_node.get(status_msg_id)
+        return self._nodes.get(node_id) if node_id else None
