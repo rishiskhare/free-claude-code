@@ -4,9 +4,16 @@ on:
   schedule:
     - cron: "0 */12 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Sync but do not push (dry-run mode)"
+        required: false
+        default: "false"
+        type: boolean
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: sync-upstream
@@ -15,6 +22,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       UPSTREAM_REPO: Alishahryar1/free-claude-code
       UPSTREAM_BRANCH: main
@@ -22,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -32,10 +40,35 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b
+        with:
+          version: "0.10.2"
+          enable-cache: true
+          cache-python: true
+
       - name: Fetch upstream
         run: |
           git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" 2>/dev/null || true
           git fetch upstream "${{ env.UPSTREAM_BRANCH }}" --no-tags
+
+      - name: Detect upstream force-push
+        id: force_push
+        run: |
+          MERGE_BASE=$(git merge-base HEAD "upstream/${{ env.UPSTREAM_BRANCH }}" 2>/dev/null || echo "")
+          if [ -z "$MERGE_BASE" ]; then
+            echo "detected=true" >> "$GITHUB_OUTPUT"
+            echo "::error::No common ancestor with upstream — upstream may have been force-pushed or rewritten."
+            exit 1
+          fi
+          # Check that the merge-base is reachable from upstream (i.e. upstream still contains our shared history)
+          if ! git merge-base --is-ancestor "$MERGE_BASE" "upstream/${{ env.UPSTREAM_BRANCH }}"; then
+            echo "detected=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Merge-base is not an ancestor of upstream HEAD — upstream history was rewritten."
+            exit 1
+          fi
+          echo "detected=false" >> "$GITHUB_OUTPUT"
+          echo "merge_base=$MERGE_BASE" >> "$GITHUB_OUTPUT"
 
       - name: Check for new upstream commits
         id: check
@@ -47,6 +80,8 @@ jobs:
           else
             echo "status=behind" >> "$GITHUB_OUTPUT"
             echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+            UPSTREAM_HEAD=$(git rev-parse "upstream/${{ env.UPSTREAM_BRANCH }}")
+            echo "upstream_head=${UPSTREAM_HEAD}" >> "$GITHUB_OUTPUT"
             echo "::notice::$BEHIND commit(s) behind upstream."
           fi
 
@@ -54,73 +89,147 @@ jobs:
         if: steps.check.outputs.status == 'behind'
         id: merge
         run: |
+          FORK_HEAD_BEFORE=$(git rev-parse HEAD)
+          echo "fork_head_before=${FORK_HEAD_BEFORE}" >> "$GITHUB_OUTPUT"
+
           if git merge "upstream/${{ env.UPSTREAM_BRANCH }}" -X ours --no-edit \
             -m "Merge upstream/${{ env.UPSTREAM_BRANCH }} into ${{ env.FORK_BRANCH }} [skip ci]"; then
-            echo "result=success" >> "$GITHUB_OUTPUT"
+            echo "result=merged" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Merge failed, attempting abort and retry with rebase strategy."
             git merge --abort 2>/dev/null || true
-            # Fall back: rebase fork commits on top of upstream
-            if git rebase -X ours "upstream/${{ env.UPSTREAM_BRANCH }}"; then
-              echo "result=rebased" >> "$GITHUB_OUTPUT"
-            else
-              git rebase --abort 2>/dev/null || true
-              echo "result=failed" >> "$GITHUB_OUTPUT"
-              echo "::error::Both merge and rebase failed. Manual intervention required."
-              exit 1
-            fi
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "::error::Merge failed with tree/structural conflicts. Manual intervention required."
+            exit 1
           fi
-
 
       - name: Auto-fix formatting
         if: steps.check.outputs.status == 'behind'
         run: |
-          # Install uv and run formatter to fix any formatting issues from merge
-          pip install uv
-          uv run ruff format || true
-          uv run ruff check --fix || true
-          # Commit formatting fixes if any
+          uv run ruff format
+          uv run ruff check --fix
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
-            git commit -m "style: auto-fix formatting after upstream sync [skip ci]" || true
+            git commit -m "style: auto-fix formatting after upstream sync [skip ci]"
           fi
 
-      - name: Pull latest before push (avoid non-fast-forward)
+      - name: Run tests
         if: steps.check.outputs.status == 'behind'
-        run: |
-          git fetch origin "${{ env.FORK_BRANCH }}"
-          # If origin moved since checkout, incorporate those changes
-          LOCAL_HEAD=$(git rev-parse HEAD)
-          ORIGIN_HEAD=$(git rev-parse "origin/${{ env.FORK_BRANCH }}")
-          if [ "$LOCAL_HEAD" != "$ORIGIN_HEAD" ] && ! git merge-base --is-ancestor "$ORIGIN_HEAD" "$LOCAL_HEAD"; then
-            echo "::notice::Origin moved since checkout, rebasing on top."
-            git rebase "origin/${{ env.FORK_BRANCH }}"
-          fi
+        run: uv run pytest --tb=short
 
-      - name: Push
-        if: steps.check.outputs.status == 'behind'
+      - name: Push with smart retry
+        if: steps.check.outputs.status == 'behind' && inputs.dry_run != 'true'
         run: |
-          # Retry push up to 3 times to handle transient failures
-          for i in 1 2 3; do
-            if git push origin "${{ env.FORK_BRANCH }}"; then
-              echo "::notice::Merged ${{ steps.check.outputs.behind }} upstream commit(s). Fork edits preserved."
+          for attempt in 1 2 3; do
+            PUSH_EXIT=0
+            git push origin "${{ env.FORK_BRANCH }}" || PUSH_EXIT=$?
+
+            if [ $PUSH_EXIT -eq 0 ]; then
+              echo "::notice::Push succeeded on attempt $attempt."
               exit 0
             fi
-            echo "::warning::Push attempt $i failed, retrying in 5s..."
-            sleep 5
-            git pull --rebase origin "${{ env.FORK_BRANCH }}"
+
+            echo "::warning::Push attempt $attempt failed (exit $PUSH_EXIT)."
+
+            # Only retry on non-fast-forward (exit 1); permission errors (exit 128) are fatal
+            if [ $PUSH_EXIT -eq 128 ]; then
+              echo "::error::Push failed with a fatal error (likely permissions). Not retrying."
+              exit 1
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Fetching origin and rebasing before retry..."
+              git fetch origin "${{ env.FORK_BRANCH }}"
+              if ! git rebase "origin/${{ env.FORK_BRANCH }}"; then
+                git rebase --abort 2>/dev/null || true
+                echo "::error::Rebase on origin failed during push retry. Manual intervention required."
+                exit 1
+              fi
+              sleep 5
+            fi
           done
           echo "::error::Push failed after 3 attempts."
           exit 1
 
+      - name: Dry-run notice
+        if: steps.check.outputs.status == 'behind' && inputs.dry_run == 'true'
+        run: |
+          echo "::notice::Dry-run mode — skipped push. The following commits would be pushed:"
+          git log --oneline "origin/${{ env.FORK_BRANCH }}..HEAD"
+
       - name: Summary
         if: always()
         run: |
-          echo "## Upstream Sync" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ steps.check.outputs.status }}" = "up-to-date" ]; then
-            echo "Already up to date with upstream." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "${{ steps.merge.outputs.result }}" = "failed" ]; then
-            echo "Sync **failed**. Manual intervention required." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Merged **${{ steps.check.outputs.behind }}** upstream commit(s) (${{ steps.merge.outputs.result }}). Fork edits preserved." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "## Upstream Sync"
+            echo ""
+            if [ "${{ steps.check.outputs.status }}" = "up-to-date" ]; then
+              echo "Already up to date with upstream."
+            elif [ "${{ steps.merge.outputs.result }}" = "failed" ] || [ "${{ steps.force_push.outputs.detected }}" = "true" ]; then
+              echo "Sync **failed**. Manual intervention required."
+              echo ""
+              if [ "${{ steps.force_push.outputs.detected }}" = "true" ]; then
+                echo "**Reason:** Upstream force-push detected."
+              else
+                echo "**Reason:** Merge conflicts that could not be auto-resolved."
+              fi
+            else
+              echo "Merged **${{ steps.check.outputs.behind }}** upstream commit(s) via \`${{ steps.merge.outputs.result }}\` strategy."
+              echo ""
+              echo "Fork edits preserved (\`-X ours\`)."
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo ""
+                echo "> **Dry run** — changes were not pushed."
+              fi
+              echo ""
+              REPO="${{ github.repository }}"
+              BEFORE="${{ steps.merge.outputs.fork_head_before }}"
+              AFTER="$(git rev-parse HEAD)"
+              if [ -n "$BEFORE" ] && [ -n "$AFTER" ] && [ "$BEFORE" != "$AFTER" ]; then
+                echo "[View diff](https://github.com/${REPO}/compare/${BEFORE}...${AFTER})"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        with:
+          script: |
+            const title = `Upstream sync failed on ${new Date().toISOString().slice(0, 10)}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The scheduled upstream sync workflow failed.`,
+              ``,
+              `**Run:** ${runUrl}`,
+              `**Force-push detected:** ${{ steps.force_push.outputs.detected || 'N/A' }}`,
+              `**Merge result:** ${{ steps.merge.outputs.result || 'N/A' }}`,
+              ``,
+              `Please investigate and resolve manually.`,
+            ].join('\n');
+
+            // Avoid duplicate issues
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'sync-failure',
+              per_page: 1,
+            });
+            if (existing.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing[0].number,
+                body: `Another sync failure occurred.\n\n${body}`,
+              });
+              core.notice(`Commented on existing issue #${existing[0].number}`);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['sync-failure'],
+              });
+              core.notice(`Created issue #${issue.number}`);
+            }
