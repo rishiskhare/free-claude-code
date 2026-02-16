@@ -18,7 +18,7 @@ Use **Claude Code CLI for free** with NVIDIA NIM's free API (unlimited usage, 40
 A lightweight proxy server that translates Claude Code's Anthropic API calls into **NVIDIA NIM**, **OpenRouter**, or **LM Studio** format.
 Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on OpenRouter, or run **fully local** with LM Studio.
 
-[Features](#features) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Discord Bot](#discord-bot) · [Configuration](#configuration)
+[Features](#features) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Providers](#providers) · [Discord Bot](#discord-bot) · [Configuration](#configuration)
 
 ---
 
@@ -36,10 +36,11 @@ Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on Ope
 | **Zero Cost** | 40 req/min free on NVIDIA NIM. Free models on OpenRouter. Fully local with LM Studio |
 | **Drop-in Replacement** | Set 2 env vars — no modifications to Claude Code CLI or VSCode extension needed |
 | **3 Providers** | NVIDIA NIM, OpenRouter (hundreds of models), LM Studio (local & offline) |
-| **Thinking Token Support** | Parses `<think>` tags and `reasoning_content` into native Claude thinking blocks |
+| **Thinking Token Support** | Parses `  <think> ` tags and `reasoning_content` into native Claude thinking blocks |
 | **Heuristic Tool Parser** | Models outputting tool calls as text are auto-parsed into structured tool use |
 | **Request Optimization** | 5 categories of trivial API calls intercepted locally — saves quota and latency |
-| **Discord Bot** | Remote autonomous coding with tree-based threading, session persistence, and live progress (Telegram also supported) |
+| **Discord Bot** | Remote autonomous coding with tree-based threading, session persistence, and live progress |
+| **Telegram Bot** | Alternative messaging platform for mobile control |
 | **Smart Rate Limiting** | Proactive rolling-window throttle + reactive 429 exponential backoff across all providers |
 | **Subagent Control** | Task tool interception forces `run_in_background=False` — no runaway subagents |
 | **Extensible** | Clean `BaseProvider` and `MessagingPlatform` ABCs — add new providers or platforms easily |
@@ -103,7 +104,7 @@ alias claude-free='/full/path/to/free-claude-code/claude-free'
 Replace the path with where you cloned the repo (e.g., `/Users/yourname/Downloads/free-claude-code/`), then reload your shell:
 
 ```bash
-source ~/.zshrc    # or: source ~/.bashrc
+source ~/.zshrc # or: source ~/.bashrc
 ```
 
 Now you can run it from any directory:
@@ -145,13 +146,53 @@ You can also create aliases that skip the picker and go straight into a specific
 alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc:moonshotai/kimi-k2.5" claude'
 ```
 
-Swap out the model ID after `freecc:` to use any model (see [Available Models](#available-models)). Then run `source ~/.zshrc` (or `source ~/.bashrc`).
+Swap out the model ID after `freecc:` to use any model. Then run `source ~/.zshrc` (or `source ~/.bashrc`).
 
 ---
 
-### Telegram (Alternative)
+## How It Works
 
-The `claude-free` picker shows all of these automatically. Here are some popular ones:
+```
+┌─────────────────┐     ┌──────────────────────┐     ┌──────────────────┐
+│  Claude Code    │────>│  Free Claude Code    │────>│  LLM Provider    │
+│  CLI / VSCode   │<────│  Proxy (:8082)       │<────│  NIM / OR / LMS  │
+└─────────────────┘     └──────────────────────┘     └──────────────────┘
+       Anthropic API    │  Optimizations             OpenAI-compatible
+       format (SSE)     ├─ Quota probes              format (SSE)
+                          ├─ Title gen skip
+                          ├─ Prefix detect
+                          ├─ Suggestion skip
+                          └─ Filepath mock
+```
+
+- **Transparent proxy** — Claude Code sends standard Anthropic API requests to the proxy server
+- **Request optimization** — 5 categories of trivial requests (quota probes, title generation, prefix detection, suggestions, filepath extraction) are intercepted and responded to instantly without using API quota
+- **Format translation** — Real requests are translated from Anthropic format to the provider's OpenAI-compatible format and streamed back
+- **Thinking tokens** — `  <think> ` tags and `reasoning_content` fields are converted into native Claude thinking blocks so Claude Code renders them correctly
+
+---
+
+## Providers
+
+Switch providers by changing `PROVIDER_TYPE` in `.env`:
+
+| Provider | Cost | Rate Limit | Models | Best For |
+|----------|------|------------|--------|----------|
+| **NVIDIA NIM** | Free | 40 req/min | Kimi K2, GLM5, Devstral, MiniMax | Daily driver — generous free tier |
+| **OpenRouter** | Free / Pay | Varies | 200+ (GPT-4o, Claude, Step, etc.) | Model variety, fallback options |
+| **LM Studio** | Free (local) | Unlimited | Any GGUF model | Privacy, offline use, no rate limits |
+
+| Provider | `PROVIDER_TYPE` | API Key Variable | Base URL |
+|----------|-----------------|------------------|----------|
+| NVIDIA NIM | `nvidia_nim` | `NVIDIA_NIM_API_KEY` | `integrate.api.nvidia.com/v1` |
+| OpenRouter | `open_router` | `OPENROUTER_API_KEY` | `openrouter.ai/api/v1` |
+| LM Studio | `lmstudio` | (none) | `localhost:1234/v1` |
+
+OpenRouter gives access to hundreds of models (StepFun, OpenAI, Anthropic, etc.) through a single API. Set `MODEL` to any OpenRouter model ID.
+
+LM Studio runs locally — start the server in LM Studio's Developer tab or via `lms server start`, load a model, and set `MODEL` to the model identifier.
+
+### Popular Models
 
 | Model | ID | Notes |
 | --- | --- | --- |
@@ -165,14 +206,55 @@ The full list is in [`nvidia_nim_models.json`](nvidia_nim_models.json). Browse a
 
 To refresh the model list with the latest from NVIDIA:
 
-Update model list:
 ```bash
 curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 ```
 
 ---
 
-## Telegram Bot Integration (Optional)
+## Discord Bot
+
+Control Claude Code remotely from Discord. Send tasks, watch live progress, and manage multiple concurrent sessions.
+
+**Capabilities:**
+- Tree-based message threading — reply to messages to fork conversations
+- Session persistence across server restarts
+- Live streaming of thinking tokens, tool calls, and results
+- Up to 10 concurrent Claude CLI sessions
+- Commands: `/stop` (cancel tasks), `/clear` (reset all sessions), `/stats`
+
+### Setup
+
+1. **Create a Discord Bot** — Go to [Discord Developer Portal](https://discord.com/developers/applications), create an application, add a bot, and copy the token. Enable **Message Content Intent** under Bot settings.
+
+2. **Edit `.env`:**
+
+```dotenv
+MESSAGING_PLATFORM=discord
+DISCORD_BOT_TOKEN=your_discord_bot_token
+ALLOWED_DISCORD_CHANNELS=123456789,987654321
+```
+
+> Enable Developer Mode in Discord (Settings → Advanced), then right-click a channel and "Copy ID" to get channel IDs. Comma-separate multiple channels. If empty, no channels are allowed.
+
+3. **Configure the workspace** (where Claude will operate):
+
+```dotenv
+CLAUDE_WORKSPACE=./agent_workspace
+ALLOWED_DIR=/Users/yourname/projects
+```
+
+4. **Start the server:**
+
+```bash
+uv run uvicorn server:app --host 0.0.0.0 --port 8082
+```
+
+5. **Invite the bot** to your server (OAuth2 → URL Generator, scopes: `bot`, permissions: Read Messages, Send Messages, Manage Messages, Read Message History). Send a message in an allowed channel with a task. Claude responds with thinking tokens, tool calls as they execute, and the final result. Reply `/stop` to a running task to cancel it.
+
+---
+
+## Telegram Bot Integration (Alternative)
 
 Control Claude Code remotely from your phone via Telegram. Send tasks, watch Claude work, get results.
 
@@ -185,6 +267,7 @@ Control Claude Code remotely from your phone via Telegram. Send tasks, watch Cla
 3. **Add both to your `.env` file:**
 
 ```dotenv
+MESSAGING_PLATFORM=telegram
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
 ALLOWED_TELEGRAM_USER_ID=your_numeric_user_id
 ```
@@ -219,7 +302,12 @@ The only setting most users need is `NVIDIA_NIM_API_KEY` in `.env`. Everything e
 | Variable | Description | Default |
 | --- | --- | --- |
 | `NVIDIA_NIM_API_KEY` | Your NVIDIA API key | **required** |
-| `MODEL` | Fallback model (when not using `claude-free`) | `moonshotai/kimi-k2.5` |
+| `PROVIDER_TYPE` | Provider: `nvidia_nim`, `open_router`, or `lmstudio` | `nvidia_nim` |
+| `MODEL` | Model to use for all requests | `stepfun-ai/step-3.5-flash` |
+| `OPENROUTER_API_KEY` | OpenRouter API key (OpenRouter provider) | `""` |
+| `LM_STUDIO_BASE_URL` | LM Studio server URL | `http://localhost:1234/v1` |
+| `PROVIDER_RATE_LIMIT` | LLM API requests per window | `40` |
+| `PROVIDER_RATE_WINDOW` | Rate limit window (seconds) | `60` |
 | `CLAUDE_WORKSPACE` | Directory for agent workspace | `./agent_workspace` |
 | `ALLOWED_DIR` | Allowed directories for agent | `""` |
 | `MAX_CLI_SESSIONS` | Max concurrent CLI sessions | `10` |
@@ -228,12 +316,13 @@ The only setting most users need is `NVIDIA_NIM_API_KEY` in `.env`. Everything e
 | `ENABLE_TITLE_GENERATION_SKIP` | Skip title generation | `true` |
 | `ENABLE_SUGGESTION_MODE_SKIP` | Skip suggestion mode | `true` |
 | `ENABLE_FILEPATH_EXTRACTION_MOCK` | Enable filepath extraction mock | `true` |
+| `MESSAGING_PLATFORM` | Messaging platform: `discord` or `telegram` | `telegram` |
+| `DISCORD_BOT_TOKEN` | Discord Bot Token | `""` |
+| `ALLOWED_DISCORD_CHANNELS` | Comma-separated channel IDs (empty = none allowed) | `""` |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | `""` |
 | `ALLOWED_TELEGRAM_USER_ID` | Allowed Telegram User ID | `""` |
-| `MESSAGING_RATE_LIMIT` | Telegram messages per window | `1` |
+| `MESSAGING_RATE_LIMIT` | Messaging messages per window | `40` |
 | `MESSAGING_RATE_WINDOW` | Messaging window (seconds) | `1` |
-| `NVIDIA_NIM_RATE_LIMIT` | API requests per window | `40` |
-| `NVIDIA_NIM_RATE_WINDOW` | Rate limit window (seconds) | `60` |
 
 The NVIDIA NIM base URL is fixed to `https://integrate.api.nvidia.com/v1`.
 
@@ -269,4 +358,3 @@ All `NVIDIA_NIM_*` settings are strictly validated; unknown keys with this prefi
 </details>
 
 See [`.env.example`](.env.example) for all supported parameters.
-
