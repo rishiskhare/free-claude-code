@@ -2,11 +2,10 @@
 
 import json
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, Request, Depends, HTTPException
 from loguru import logger
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from .models.anthropic import MessagesRequest, TokenCountRequest
 from .models.responses import TokenCountResponse
@@ -20,8 +19,6 @@ from providers.logging_utils import build_request_summary, log_request_compact
 
 
 router = APIRouter()
-
-MODELS_FILE = Path(__file__).resolve().parent.parent / "nvidia_nim_models.json"
 
 
 def _parse_model_override(raw_request: Request) -> str | None:
@@ -117,20 +114,6 @@ async def count_tokens(request_data: TokenCountRequest):
                 traceback.format_exc(),
             )
             raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/v1/models")
-async def list_models():
-    """Return available NVIDIA NIM models from nvidia_nim_models.json."""
-    try:
-        data = json.loads(MODELS_FILE.read_text())
-        return JSONResponse(content=data)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="nvidia_nim_models.json not found")
-    except json.JSONDecodeError:
-        raise HTTPException(
-            status_code=500, detail="Invalid JSON in nvidia_nim_models.json"
-        )
 
 
 @router.get("/")

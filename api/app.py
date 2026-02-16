@@ -184,6 +184,11 @@ def create_app() -> FastAPI:
     # Register routes
     app.include_router(router)
 
+    # Register custom fork routes (claude-free model picker)
+    from .custom_routes import router as custom_router
+
+    app.include_router(custom_router)
+
     # Exception handlers
     @app.exception_handler(ProviderError)
     async def provider_error_handler(request: Request, exc: ProviderError):
