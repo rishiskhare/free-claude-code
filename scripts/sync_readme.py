@@ -1,50 +1,15 @@
-<div align="center">
+#!/usr/bin/env python3
+from __future__ import annotations
 
-# Free Claude Code
+import os
+import re
+import subprocess
+from pathlib import Path
 
-> Based on [Alishahryar1/free-claude-code](https://github.com/Alishahryar1/free-claude-code). This fork adds simplified setup and easy custom model selection.
-
-
-### Use Claude Code CLI & VSCode — for free. No Anthropic API key required.
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=for-the-badge)](https://github.com/astral-sh/uv)
-[![Tested with Pytest](https://img.shields.io/badge/testing-Pytest-00c0ff.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/actions/workflows/tests.yml)
-[![Type checking: Ty](https://img.shields.io/badge/type%20checking-ty-ffcc00.svg?style=for-the-badge)](https://pypi.org/project/ty/)
-[![Code style: Ruff](https://img.shields.io/badge/code%20formatting-ruff-f5a623.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
-[![Logging: Loguru](https://img.shields.io/badge/logging-loguru-4ecdc4.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
-
-A lightweight proxy server that translates Claude Code's Anthropic API calls into **NVIDIA NIM**, **OpenRouter**, or **LM Studio** format.
-Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on OpenRouter, or run **fully local** with LM Studio.
-
-[Features](#features) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Discord Bot](#discord-bot) · [Configuration](#configuration)
-
----
-
-</div>
-
-<div align="center">
-  <img src="pic.png" alt="Free Claude Code in action" width="700">
-  <p><em>Claude Code running via NVIDIA NIM — completely free</em></p>
-</div>
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| **Zero Cost** | 40 req/min free on NVIDIA NIM. Free models on OpenRouter. Fully local with LM Studio |
-| **Drop-in Replacement** | Set 2 env vars — no modifications to Claude Code CLI or VSCode extension needed |
-| **3 Providers** | NVIDIA NIM, OpenRouter (hundreds of models), LM Studio (local & offline) |
-| **Thinking Token Support** | Parses `<think>` tags and `reasoning_content` into native Claude thinking blocks |
-| **Heuristic Tool Parser** | Models outputting tool calls as text are auto-parsed into structured tool use |
-| **Request Optimization** | 5 categories of trivial API calls intercepted locally — saves quota and latency |
-| **Discord Bot** | Remote autonomous coding with tree-based threading, session persistence, and live progress (Telegram also supported) |
-| **Smart Rate Limiting** | Proactive rolling-window throttle + reactive 429 exponential backoff across all providers |
-| **Subagent Control** | Task tool interception forces `run_in_background=False` — no runaway subagents |
-| **Extensible** | Clean `BaseProvider` and `MessagingPlatform` ABCs — add new providers or platforms easily |
-
-## Quick Start (5 minutes)
+ROOT = Path(__file__).resolve().parents[1]
+UPSTREAM_REF = os.environ.get("UPSTREAM_REF", "upstream/main")
+TOP_NOTE = "> Based on [Alishahryar1/free-claude-code](https://github.com/Alishahryar1/free-claude-code). This fork adds simplified setup and easy custom model selection."
+QUICK_START_SECTION = """## Quick Start (5 minutes)
 
 ### Step 1: Install the prerequisites
 
@@ -137,8 +102,8 @@ If you use the [Claude Code VSCode extension](https://marketplace.visualstudio.c
 That's it - the Claude Code panel in VSCode now uses NVIDIA NIM for free. To switch back to Anthropic, remove or comment out the block above and reload.
 
 > **Tip:** To use a specific model from VSCode, set the token to `freecc:model-id` (e.g., `"freecc:moonshotai/kimi-k2.5"`). Otherwise it uses the `MODEL` value from your `.env`.
-
-## Model-Specific Aliases (Optional)
+"""
+MODEL_ALIASES_SECTION = """## Model-Specific Aliases (Optional)
 
 You can also create aliases that skip the picker and go straight into a specific model. Add this to your `~/.zshrc` or `~/.bashrc`:
 
@@ -147,3 +112,56 @@ alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOK
 ```
 
 Swap out the model ID after `freecc:` to use any model. Then run `source ~/.zshrc` (or `source ~/.bashrc`).
+"""
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def git_show(ref: str, relpath: str) -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "show", f"{ref}:{relpath}"],
+            cwd=ROOT,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+
+def ensure_top_note(text: str, note: str) -> str:
+    if note.strip() in text:
+        return text
+    match = re.search(r"^# .+$", text, re.M)
+    if match:
+        insert_at = match.end()
+        return text[:insert_at] + "\n\n" + note.strip() + "\n" + text[insert_at:]
+    return note.strip() + "\n\n" + text
+
+
+def replace_section(text: str, heading_pattern: str, new_section: str) -> str:
+    pattern = re.compile(
+        rf"^{heading_pattern}\n.*?(?=^##\s+|\Z)",
+        re.S | re.M,
+    )
+    new_block = new_section.strip() + "\n\n"
+    if pattern.search(text):
+        return pattern.sub(new_block, text, count=1)
+    return text.rstrip() + "\n\n" + new_block
+
+
+def main() -> None:
+    upstream_readme = git_show(UPSTREAM_REF, "README.md")
+    if upstream_readme is None:
+        upstream_readme = read_text(ROOT / "README.md")
+
+    updated = ensure_top_note(upstream_readme, TOP_NOTE)
+    updated = replace_section(updated, r"##\s+Quick Start.*", QUICK_START_SECTION)
+    updated = replace_section(updated, r"##\s+Model-Specific Aliases.*", MODEL_ALIASES_SECTION)
+
+    (ROOT / "README.md").write_text(updated.rstrip() + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

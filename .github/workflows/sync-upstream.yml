@@ -13,7 +13,7 @@ on:
 
 permissions:
   contents: write
-  issues: write
+  workflows: write
 
 concurrency:
   group: sync-upstream
@@ -39,13 +39,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b
-        with:
-          version: "0.10.2"
-          enable-cache: true
-          cache-python: true
 
       - name: Fetch upstream
         run: |
@@ -85,14 +78,14 @@ jobs:
             echo "::notice::$BEHIND commit(s) behind upstream."
           fi
 
-      - name: Merge upstream (fork wins on conflicts)
+      - name: Merge upstream (upstream wins on conflicts)
         if: steps.check.outputs.status == 'behind'
         id: merge
         run: |
           FORK_HEAD_BEFORE=$(git rev-parse HEAD)
           echo "fork_head_before=${FORK_HEAD_BEFORE}" >> "$GITHUB_OUTPUT"
 
-          if git merge "upstream/${{ env.UPSTREAM_BRANCH }}" -X ours --no-edit \
+          if git merge "upstream/${{ env.UPSTREAM_BRANCH }}" -X theirs --no-edit \
             -m "Merge upstream/${{ env.UPSTREAM_BRANCH }} into ${{ env.FORK_BRANCH }} [skip ci]"; then
             echo "result=merged" >> "$GITHUB_OUTPUT"
           else
@@ -102,53 +95,26 @@ jobs:
             exit 1
           fi
 
-      - name: Auto-fix formatting
+      - name: Reapply fork overrides
         if: steps.check.outputs.status == 'behind'
         run: |
-          uv run ruff format
-          uv run ruff check --fix
+          python3 scripts/sync_readme.py
+          cp -f fork/claude-free claude-free
+          chmod +x claude-free
           if [ -n "$(git status --porcelain)" ]; then
-            git add -A
-            git commit -m "style: auto-fix formatting after upstream sync [skip ci]"
+            git add README.md claude-free
+            git commit -m "chore: reapply fork overrides after upstream sync [skip ci]"
           fi
 
-      - name: Run tests
-        if: steps.check.outputs.status == 'behind'
-        run: uv run pytest --tb=short
-
-      - name: Push with smart retry
+      - name: Push changes
         if: steps.check.outputs.status == 'behind' && inputs.dry_run != 'true'
         run: |
-          for attempt in 1 2 3; do
-            PUSH_EXIT=0
-            git push origin "${{ env.FORK_BRANCH }}" || PUSH_EXIT=$?
-
-            if [ $PUSH_EXIT -eq 0 ]; then
-              echo "::notice::Push succeeded on attempt $attempt."
-              exit 0
-            fi
-
-            echo "::warning::Push attempt $attempt failed (exit $PUSH_EXIT)."
-
-            # Only retry on non-fast-forward (exit 1); permission errors (exit 128) are fatal
-            if [ $PUSH_EXIT -eq 128 ]; then
-              echo "::error::Push failed with a fatal error (likely permissions). Not retrying."
-              exit 1
-            fi
-
-            if [ "$attempt" -lt 3 ]; then
-              echo "Fetching origin and rebasing before retry..."
-              git fetch origin "${{ env.FORK_BRANCH }}"
-              if ! git rebase "origin/${{ env.FORK_BRANCH }}"; then
-                git rebase --abort 2>/dev/null || true
-                echo "::error::Rebase on origin failed during push retry. Manual intervention required."
-                exit 1
-              fi
-              sleep 5
-            fi
-          done
-          echo "::error::Push failed after 3 attempts."
-          exit 1
+          if git push origin "${{ env.FORK_BRANCH }}"; then
+            echo "::notice::Push succeeded."
+          else
+            echo "::error::Push failed. This is usually permissions or non-fast-forward. Re-run after resolving branch state."
+            exit 1
+          fi
 
       - name: Dry-run notice
         if: steps.check.outputs.status == 'behind' && inputs.dry_run == 'true'
@@ -175,7 +141,7 @@ jobs:
             else
               echo "Merged **${{ steps.check.outputs.behind }}** upstream commit(s) via \`${{ steps.merge.outputs.result }}\` strategy."
               echo ""
-              echo "Fork edits preserved (\`-X ours\`)."
+              echo "Fork overrides reapplied after merge."
               if [ "${{ inputs.dry_run }}" = "true" ]; then
                 echo ""
                 echo "> **Dry run** — changes were not pushed."
@@ -189,47 +155,3 @@ jobs:
               fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Create issue on failure
-        if: failure()
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
-        with:
-          script: |
-            const title = `Upstream sync failed on ${new Date().toISOString().slice(0, 10)}`;
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = [
-              `The scheduled upstream sync workflow failed.`,
-              ``,
-              `**Run:** ${runUrl}`,
-              `**Force-push detected:** ${{ steps.force_push.outputs.detected || 'N/A' }}`,
-              `**Merge result:** ${{ steps.merge.outputs.result || 'N/A' }}`,
-              ``,
-              `Please investigate and resolve manually.`,
-            ].join('\n');
-
-            // Avoid duplicate issues
-            const { data: existing } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'sync-failure',
-              per_page: 1,
-            });
-            if (existing.length > 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing[0].number,
-                body: `Another sync failure occurred.\n\n${body}`,
-              });
-              core.notice(`Commented on existing issue #${existing[0].number}`);
-            } else {
-              const { data: issue } = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: ['sync-failure'],
-              });
-              core.notice(`Created issue #${issue.number}`);
-            }
