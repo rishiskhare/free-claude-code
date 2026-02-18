@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: write
-  workflows: write
 
 concurrency:
   group: sync-upstream
@@ -98,11 +97,13 @@ jobs:
       - name: Reapply fork overrides
         if: steps.check.outputs.status == 'behind'
         run: |
+          # Keep fork-owned workflow files to avoid workflow-permission push rejections.
+          git restore --source=HEAD^1 -- .github/workflows
           python3 scripts/sync_readme.py
           cp -f fork/claude-free claude-free
           chmod +x claude-free
           if [ -n "$(git status --porcelain)" ]; then
-            git add README.md claude-free
+            git add .github/workflows README.md claude-free
             git commit -m "chore: reapply fork overrides after upstream sync [skip ci]"
           fi
 
