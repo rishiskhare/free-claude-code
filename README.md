@@ -67,13 +67,13 @@ cd free-claude-code
 cp .env.example .env
 ```
 
-Now open `.env` in any text editor and paste your NVIDIA API key on the first line:
+Now open `.env` and set the `NVIDIA_NIM_API_KEY` value:
 
 ```dotenv
-NVIDIA_NIM_API_KEY=nvapi-paste-your-key-here
+NVIDIA_NIM_API_KEY="nvapi-paste-your-key-here"
 ```
 
-Save the file. That's the only thing you need to edit.
+You only need to change that one key to get started.
 
 > **Want to use a different provider?** See [Providers](#providers) for OpenRouter (hundreds of models) or LM Studio (fully local).
 
