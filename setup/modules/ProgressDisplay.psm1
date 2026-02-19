@@ -204,18 +204,18 @@ function Read-UserInput {
 
     do {
         if ($Default) {
-            $input = Read-Host "$Prompt [$Default]"
-            if ([string]::IsNullOrWhiteSpace($input)) {
-                $input = $Default
+            $userInput = Read-Host "$Prompt [$Default]"
+            if ([string]::IsNullOrWhiteSpace($userInput)) {
+                $userInput = $Default
             }
         } else {
-            $input = Read-Host $Prompt
+            $userInput = Read-Host $Prompt
         }
         
-        $validationResult = & $Validation $input
+        $validationResult = & $Validation $userInput
         
         if ($validationResult -eq $true) {
-            return $input
+            return $userInput
         } else {
             Write-Host "Invalid input: $validationResult" -ForegroundColor Red
         }

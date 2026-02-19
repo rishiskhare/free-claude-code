@@ -45,7 +45,6 @@ function Read-Confirmation {
         [switch]$DefaultYes
     )
 
-    $default = if ($DefaultYes) { 'Y' } else { 'n' }
     $choices = if ($DefaultYes) { 'Y/n' } else { 'y/N' }
     
     do {

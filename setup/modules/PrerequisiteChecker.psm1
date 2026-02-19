@@ -350,8 +350,8 @@ function Install-Python {
         
         Write-Host "  Installing Python (this may take a few minutes)..." -ForegroundColor Gray
         
-        $args = "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_pip=1"
-        $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru -NoNewWindow
+        $installerArguments = "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_pip=1"
+        $process = Start-Process -FilePath $installer -ArgumentList $installerArguments -Wait -PassThru -NoNewWindow
         
         if ($process.ExitCode -ne 0) {
             throw "Python installer failed with exit code $($process.ExitCode)"
@@ -395,8 +395,8 @@ function Install-NodeJS {
         
         Write-Host "  Installing Node.js (this may take a few minutes)..." -ForegroundColor Gray
         
-        $args = "/i `"$installer`" /quiet /norestart"
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $args -Wait -PassThru -NoNewWindow
+        $msiArguments = "/i `"$installer`" /quiet /norestart"
+        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArguments -Wait -PassThru -NoNewWindow
         
         if ($process.ExitCode -notin @(0, 3010)) {
             throw "Node.js installer failed with exit code $($process.ExitCode)"
